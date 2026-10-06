@@ -1,0 +1,5 @@
+/data/data/com.termux/files/home/mycelium/vault/topology.md
+/data/data/com.termux/files/home/mycelium/vault/mesh_security.md
+/data/data/com.termux/files/home/mycelium/vault/encryption.md
+/data/data/com.termux/files/home/mycelium/vault/hyphae.txt
+/data/data/com.termux/files/home/mycelium/vault/notes.md

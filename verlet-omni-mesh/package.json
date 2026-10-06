@@ -1,0 +1,12 @@
+{
+  "name": "verlet-omni-mesh",
+  "version": "10.12.0",
+  "description": "Encrypted Verlet Mesh Gossip Protocol with Force-Directed Clustering",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

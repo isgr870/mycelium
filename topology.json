@@ -1,0 +1,58 @@
+{
+  "nodes": [
+    {
+      "id": "node_alpha",
+      "label": "node_alpha (Port 9001)",
+      "status": "active",
+      "tcp_port": 9001,
+      "http_port": 8081
+    },
+    {
+      "id": "node_beta",
+      "label": "node_beta (Port 9002)",
+      "status": "active",
+      "tcp_port": 9002,
+      "http_port": 8082
+    },
+    {
+      "id": "node_gamma",
+      "label": "node_gamma (Port 9003)",
+      "status": "active",
+      "tcp_port": 9003,
+      "http_port": 8083
+    },
+    {
+      "id": "node_delta",
+      "label": "node_delta (Port 9004)",
+      "status": "active",
+      "tcp_port": 9004,
+      "http_port": 8084
+    }
+  ],
+  "links": [
+    {
+      "source": "node_alpha",
+      "target": "node_beta"
+    },
+    {
+      "source": "node_alpha",
+      "target": "node_gamma"
+    },
+    {
+      "source": "node_alpha",
+      "target": "node_delta"
+    },
+    {
+      "source": "node_beta",
+      "target": "node_gamma"
+    },
+    {
+      "source": "node_beta",
+      "target": "node_delta"
+    },
+    {
+      "source": "node_gamma",
+      "target": "node_delta"
+    }
+  ]
+}

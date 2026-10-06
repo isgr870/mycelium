@@ -1,0 +1,3 @@
+timestamp,stage_id,demand_count,waiting_count,rider_count,weather,traffic_level,observer_confidence,status
+2026-08-09T14:00:00,namataba,15,4,11,clear,moderate,0.9,valid
+2026-08-09T14:30:00,namataba,22,8,14,rain,heavy,0.85,valid

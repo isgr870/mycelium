@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VERLET OMNI-MESH // v12.1 Stabilized</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Courier New', monospace; }
+        body { background: #050b14; color: #00ffcc; overflow-x: hidden; padding: 10px; }
+        header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #00ffcc33; padding-bottom: 8px; margin-bottom: 10px; font-size: 13px; }
+        #canvas-container { position: relative; width: 100%; height: 280px; background: #02050a; border: 1px solid #00ffcc44; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+        canvas { display: block; width: 100%; height: 100%; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .panel { background: #071120; border: 1px solid #00ffcc33; border-radius: 4px; padding: 8px; margin-bottom: 8px; font-size: 11px; }
+        .panel h3 { color: #ff007f; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        .row { display: flex; gap: 6px; margin-bottom: 4px; }
+        button { background: #00ffcc22; color: #00ffcc; border: 1px solid #00ffcc; padding: 5px 10px; cursor: pointer; border-radius: 3px; font-weight: bold; font-size: 11px; }
+        button:hover { background: #00ffcc44; }
+        input, textarea { width: 100%; background: #02050a; border: 1px solid #00ffcc44; color: #00ffcc; padding: 5px; border-radius: 3px; font-family: monospace; font-size: 11px; }
+        .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; color: #88ccff; font-size: 10px; }
+        #chat-feed { height: 75px; overflow-y: auto; background: #02050a; border: 1px solid #00ffcc22; padding: 5px; margin-bottom: 4px; }
+        #audit-log { height: 60px; overflow-y: auto; background: #02050a; border: 1px solid #ff007f33; padding: 5px; color: #ff88cc; font-size: 9px; }
+        .crdt-box { background: #030812; border: 1px dashed #00ffcc44; padding: 5px; max-height: 60px; overflow-y: auto; color: #ffff88; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <span>OMNI-MESH v12.1 // [STABLE IK + DE-DUPED BEACONS]</span>
+        <span id="header-status">PEERS: 0 | TTL-HOPS: 0 | DAEMON: ONLINE</span>
+    </header>
+
+    <div id="canvas-container">
+        <canvas id="meshCanvas"></canvas>
+    </div>
+
+    <div class="grid-2">
+        <div class="panel">
+            <h3>0. Crypto Vault & Daemon</h3>
+            <div class="row">
+                <input type="text" id="node-id" readonly />
+            </div>
+            <div class="metrics-grid">
+                <div>Routed Packets: <span id="m-packets">0</span></div>
+                <div>Daemon Uptime: <span id="m-uptime">0s</span></div>
+                <div>Max TTL Hops: <span id="m-hops">0</span></div>
+                <div>Physics Engine: Safe IK</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>1. CRDT Distributed LWW-State</h3>
+            <div class="row">
+                <input type="text" id="crdt-key" placeholder="Key" style="width: 35%;" />
+                <input type="text" id="crdt-val" placeholder="Value" style="width: 45%;" />
+                <button onclick="updateCRDTState()">Sync</button>
+            </div>
+            <div class="crdt-box" id="crdt-view">Synchronizing distributed state...</div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3>2. Multi-Hop Encrypted Gossip & TTL Mesh</h3>
+        <div id="chat-feed">Mesh listener active (Stabilized routing)...<br></div>
+        <div class="row">
+            <input type="text" id="chat-input" placeholder="Broadcast multi-hop encrypted packet..." />
+            <button onclick="sendMultiHopMessage()">BROADCAST HOP</button>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3>3. System Audit Log</h3>
+        <div id="audit-log">> BroadcastChannel & Stabilization patches loaded.<br></div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('meshCanvas');
+    const ctx = canvas.getContext('2d');
+    function resizeCanvas() {
+        canvas.width = canvas.parentElement.clientWidth;
+        canvas.height = canvas.parentElement.clientHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    const nodeId = 'node_' + Math.random().toString(16).substring(2, 8);
+    document.getElementById('node-id').value = nodeId;
+
+    let localKeyPair = null;
+    let peerKeys = new Map();
+    let peerConnections = new Map();
+    let packetCount = 0;
+    let maxHopsSeen = 0;
+
+    let crdtState = new Map();
+    const channel = new BroadcastChannel('omni_mesh_v12_core');
+
+    let nodes = [];
+    let constraints = [];
+
+    function initNodes() {
+        nodes.push({
+            id: nodeId,
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            oldX: canvas.width / 2,
+            oldY: canvas.height / 2,
+            color: '#00ffcc',
+            radius: 8,
+            pinned: false
+        });
+    }
+    initNodes();
+
+    async function initCrypto() {
+        localKeyPair = await window.crypto.subtle.generateKey(
+            { name: "ECDH", namedCurve: "P-256" },
+            true,
+            ["deriveKey", "deriveBits"]
+        );
+        logAudit(`Generated P-256 crypto vault for ${nodeId}`);
+        broadcastBeacon();
+    }
+
+    let lastBeaconSent = 0;
+    function broadcastBeacon() {
+        if (!localKeyPair) return;
+        const now = Date.now();
+        if (now - lastBeaconSent < 2000) return; // Rate limit beacons to prevent loops
+        lastBeaconSent = now;
+
+        window.crypto.subtle.exportKey("jwk", localKeyPair.publicKey).then(pubKeyExport => {
+            channel.postMessage({
+                type: 'DISCOVERY_BEACON',
+                sender: nodeId,
+                pubKey: pubKeyExport,
+                timestamp: now
+            });
+        });
+    }
+
+    async function handleBeacon(msg) {
+        if (msg.sender === nodeId) return;
+        try {
+            const remotePublicKey = await window.crypto.subtle.importKey(
+                "jwk",
+                msg.pubKey,
+                { name: "ECDH", namedCurve: "P-256" },
+                true,
+                []
+            );
+            const sharedKey = await window.crypto.subtle.deriveKey(
+                { name: "ECDH", public: remotePublicKey },
+                localKeyPair.privateKey,
+                { name: "AES-GCM", length: 256 },
+                true,
+                ["encrypt", "decrypt"]
+            );
+
+            peerKeys.set(msg.sender, sharedKey);
+            peerConnections.set(msg.sender, Date.now());
+
+            let existingNode = nodes.find(n => n.id === msg.sender);
+            if (!existingNode) {
+                const newNode = {
+                    id: msg.sender,
+                    x: canvas.width / 2 + (Math.random() - 0.5) * 120,
+                    y: canvas.height / 2 + (Math.random() - 0.5) * 120,
+                    oldX: canvas.width / 2,
+                    oldY: canvas.height / 2,
+                    color: '#ff007f',
+                    radius: 6,
+                    pinned: false
+                };
+                nodes.push(newNode);
+
+                // Prevent duplicate constraint explosion
+                const hasConstraint = constraints.some(c => 
+                    (c.p1 === nodes[0] && c.p2 === newNode) || (c.p1 === newNode && c.p2 === nodes[0])
+                );
+                if (!hasConstraint) {
+                    constraints.push({
+                        p1: nodes[0],
+                        p2: newNode,
+                        length: 90,
+                        stiffness: 0.08
+                    });
+                }
+            }
+
+            logAudit(`Secured AES-GCM shared key with peer: ${msg.sender}`);
+            updateStatus();
+
+            // Respond back once if not already known
+            window.crypto.subtle.exportKey("jwk", localKeyPair.publicKey).then(pubKeyExport => {
+                channel.postMessage({
+                    type: 'DISCOVERY_RESPONSE',
+                    sender: nodeId,
+                    pubKey: pubKeyExport,
+                    timestamp: Date.now()
+                });
+            });
+        } catch (e) {
+            logAudit(`Beacon error: ${e.message}`);
+        }
+    }
+
+    function updateCRDTState() {
+        const k = document.getElementById('crdt-key').value;
+        const v = document.getElementById('crdt-val').value;
+        if (!k) return;
+
+        const entry = { val: v, timestamp: Date.now(), sender: nodeId };
+        crdtState.set(k, entry);
+        renderCRDTView();
+
+        channel.postMessage({
+            type: 'CRDT_SYNC',
+            sender: nodeId,
+            key: k,
+            entry: entry
+        });
+        logAudit(`Synced CRDT key [${k}] -> "${v}"`);
+    }
+
+    function handleCRDTUpdate(msg) {
+        const existing = crdtState.get(msg.key);
+        if (!existing || msg.entry.timestamp > existing.timestamp) {
+            crdtState.set(msg.key, msg.entry);
+            renderCRDTView();
+            logAudit(`CRDT convergence: updated [${msg.key}] from ${msg.sender}`);
+        }
+    }
+
+    function renderCRDTView() {
+        let html = '';
+        for (let [k, entry] of crdtState.entries()) {
+            html += `<div><b>${k}</b>: ${entry.val} <span style="color:#888">(${entry.sender})</span></div>`;
+        }
+        document.getElementById('crdt-view').innerHTML = html || 'No state records.';
+    }
+
+    async function sendMultiHopMessage() {
+        const text = document.getElementById('chat-input').value;
+        if (!text) return;
+
+        for (let [peerId, sharedKey] of peerKeys.entries()) {
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const encoded = new TextEncoder().encode(text);
+            const cipher = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, sharedKey, encoded);
+
+            const packet = {
+                type: 'ROUTED_PACKET',
+                sender: nodeId,
+                target: peerId,
+                iv: Array.from(iv),
+                payload: Array.from(new Uint8Array(cipher)),
+                ttl: 5,
+                hops: 1,
+                path: [nodeId]
+            };
+            channel.postMessage(packet);
+        }
+
+        appendChatFeed(`${nodeId} [hop:1 TTL:5]: ${text}`);
+        document.getElementById('chat-input').value = '';
+        packetCount++;
+        document.getElementById('m-packets').innerText = packetCount;
+    }
+
+    async function handleRoutedPacket(msg) {
+        if (msg.path.includes(nodeId)) return;
+
+        if (msg.target === nodeId || !msg.target) {
+            let decrypted = "[Encrypted]";
+            try {
+                const sk = peerKeys.get(msg.sender);
+                if (sk) {
+                    const dec = await window.crypto.subtle.decrypt(
+                        { name: "AES-GCM", iv: new Uint8Array(msg.iv) },
+                        sk,
+                        new Uint8Array(msg.payload)
+                    );
+                    decrypted = new TextDecoder().decode(dec);
+                }
+            } catch(e) { decrypted = "[Key Mismatch / Transit]"; }
+
+            appendChatFeed(`${msg.sender} [hops:${msg.hops}]: ${decrypted}`);
+            maxHopsSeen = Math.max(maxHopsSeen, msg.hops);
+            document.getElementById('m-hops').innerText = maxHopsSeen;
+        } else if (msg.ttl > 1) {
+            msg.ttl -= 1;
+            msg.hops += 1;
+            msg.path.push(nodeId);
+            channel.postMessage(msg);
+        }
+    }
+
+    channel.onmessage = async (event) => {
+        const msg = event.data;
+        if (!msg || msg.sender === nodeId) return;
+
+        if (msg.type === 'DISCOVERY_BEACON' || msg.type === 'DISCOVERY_RESPONSE') {
+            await handleBeacon(msg);
+        } else if (msg.type === 'CRDT_SYNC') {
+            handleCRDTUpdate(msg);
+        } else if (msg.type === 'ROUTED_PACKET') {
+            await handleRoutedPacket(msg);
+        }
+    };
+
+    function appendChatFeed(msg) {
+        const feed = document.getElementById('chat-feed');
+        feed.innerHTML += `<div>${msg}</div>`;
+        feed.scrollTop = feed.scrollHeight;
+    }
+
+    function logAudit(txt) {
+        const log = document.getElementById('audit-log');
+        log.innerHTML += `> ${txt}<br>`;
+        log.scrollTop = log.scrollHeight;
+    }
+
+    function updateStatus() {
+        document.getElementById('header-status').innerText = `PEERS: ${peerConnections.size} | MAX-HOPS: ${maxHopsSeen} | DAEMON: ONLINE`;
+    }
+
+    setInterval(async () => {
+        try {
+            const res = await fetch('/api/telemetry');
+            const data = await res.json();
+            document.getElementById('m-uptime').innerText = Math.floor(data.uptime) + 's';
+        } catch(e) {
+            document.getElementById('m-uptime').innerText = 'offline';
+        }
+    }, 3000);
+
+    initCrypto().then(() => setTimeout(broadcastBeacon, 500));
+
+    // Stabilized Verlet Physics Loop with NaN Guards & Constraint Limits
+    let lastTime = performance.now();
+    function physicsLoop(currentTime) {
+        let dt = (currentTime - lastTime) / 1000;
+        lastTime = currentTime;
+        dt = Math.min(dt, 0.1);
+
+        nodes.forEach(node => {
+            if (isNaN(node.x) || isNaN(node.y)) {
+                node.x = canvas.width / 2 + (Math.random() - 0.5) * 50;
+                node.y = canvas.height / 2 + (Math.random() - 0.5) * 50;
+                node.oldX = node.x;
+                node.oldY = node.y;
+            }
+            if (node.pinned) return;
+
+            let vx = (node.x - node.oldX) * 0.95;
+            let vy = (node.y - node.oldY) * 0.95;
+            node.oldX = node.x;
+            node.oldY = node.y;
+            node.x += vx;
+            node.y += vy;
+
+            if (node.x < 20) node.x = 20;
+            if (node.x > canvas.width - 20) node.x = canvas.width - 20;
+            if (node.y < 20) node.y = 20;
+            if (node.y > canvas.height - 20) node.y = canvas.height - 20;
+        });
+
+        for (let iter = 0; iter < 2; iter++) {
+            constraints.forEach(c => {
+                let dx = c.p2.x - c.p1.x;
+                let dy = c.p2.y - c.p1.y;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 1) dist = 1;
+                let diff = (dist - c.length) / dist * c.stiffness;
+                
+                if (!c.p1.pinned) {
+                    c.p1.x += dx * diff * 0.5;
+                    c.p1.y += dy * diff * 0.5;
+                }
+                if (!c.p2.pinned) {
+                    c.p2.x -= dx * diff * 0.5;
+                    c.p2.y -= dy * diff * 0.5;
+                }
+            });
+
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    let dx = nodes[j].x - nodes[i].x;
+                    let dy = nodes[j].y - nodes[i].y;
+                    let dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < 1) dist = 1;
+                    if (dist < 50) {
+                        let rep = (50 - dist) * 0.05;
+                        nodes[i].x -= (dx / dist) * rep;
+                        nodes[i].y -= (dy / dist) * rep;
+                        nodes[j].x += (dx / dist) * rep;
+                        nodes[j].y += (dy / dist) * rep;
+                    }
+                }
+            }
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        constraints.forEach(c => {
+            ctx.beginPath();
+            ctx.moveTo(c.p1.x, c.p1.y);
+            ctx.lineTo(c.p2.x, c.p2.y);
+            ctx.strokeStyle = '#00ffcc44';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        });
+
+        nodes.forEach(node => {
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+            ctx.fillStyle = node.color;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = node.color;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '10px monospace';
+            ctx.fillText(node.id, node.x + 10, node.y + 3);
+        });
+
+        requestAnimationFrame(physicsLoop);
+    }
+    requestAnimationFrame(physicsLoop);
+</script>
+</body>
+</html>

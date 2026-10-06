@@ -1,0 +1,1 @@
+Mycelium routing relies on subterranean fungal hyphae node discovery protocols.
