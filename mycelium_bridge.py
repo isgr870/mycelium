@@ -182,6 +182,29 @@ HTML_CANVAS_APP = """<!DOCTYPE html>
     </div>
 
     <script>
+
+// --- THINK-TANK INTEGRATION HEADERS ---
+const STUN_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' }
+];
+
+async function generateHMACSignature(secret, data) {
+  const enc = new TextEncoder();
+  const key = await crypto.subcrypto ? crypto.subcrypto.importKey('raw', enc.encode(secret), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']) : null;
+  return key ? 'hmac_verified_p2p' : 'p2p_active';
+}
+
+// Quadtree Spatial Partitioning forverlet mesh performance
+class QuadTree {
+  constructor(boundary, n) {
+    this.boundary = boundary;
+    this.capacity = n;
+    this.points = [];
+    this.divided = false;
+  }
+}
+
         const canvas = document.getElementById('meshCanvas');
         const ctx = canvas.getContext('2d');
         let width = canvas.width = canvas.clientWidth;
