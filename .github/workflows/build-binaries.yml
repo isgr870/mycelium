@@ -19,7 +19,7 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Set up Python
+    - name: Set up Python 3.10
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
@@ -33,7 +33,7 @@ jobs:
           libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
           libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev \
           autoconf automake libtool pkg-config cmake ninja-build
-        pip install --upgrade pip
+        python -m pip install --upgrade pip
         pip install "cython<3.0.0" buildozer
 
     - name: Pre-accept Android SDK Licenses
@@ -46,7 +46,13 @@ jobs:
       run: |
         yes | buildozer -v android debug
 
+    - name: Print Debug Logs on Failure
+      if: failure()
+      run: |
+        find .buildozer/ -name "*.log" -exec tail -n 100 {} + || true
+
     - name: Upload Android APK Artifact
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: Mycelium-v10.12-Android-APK
@@ -59,7 +65,7 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Set up Python
+    - name: Set up Python 3.10
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
