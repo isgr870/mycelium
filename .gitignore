@@ -16,3 +16,12 @@ pids/
 .coverage
 .pytest_cache/
 *.zip
+*.log
+llama-cli
+llama-server
+models/
+
+*.log
+llama-cli
+llama-server
+models/

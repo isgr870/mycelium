@@ -62,6 +62,15 @@ threading.Thread(target=udp_broadcaster, daemon=True).start()
 threading.Thread(target=udp_listener, daemon=True).start()
 
 app = FastAPI(title="Mycelium Mesh Node")
+from core.security_hardening import (
+    validate_production_environment,
+    PayloadAndRateLimitMiddleware,
+    WebSocketGuard,
+)
+
+SECRET_KEY = validate_production_environment(strict=True)
+app.add_middleware(PayloadAndRateLimitMiddleware, max_bytes=65536, rate_per_min=120)
+ws_guard = WebSocketGuard(max_bytes=65536, rate_per_min=240)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def get_local_knowledge(prompt: str) -> str:
