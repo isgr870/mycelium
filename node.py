@@ -80,6 +80,11 @@ app.include_router(wan_router)
 async def _start_wan_mesh():
     public_url = os.environ.get("MYCELIUM_PUBLIC_URL", "").strip()
     asyncio.create_task(sync_with_bootstrap_peers(self_url=public_url))
+    from core.spore_vault_sync import router as spore_router
+    from core.resilience_queue import router as resilience_router, resilience_flush_loop
+    app.include_router(spore_router)
+    app.include_router(resilience_router)
+    asyncio.create_task(resilience_flush_loop())
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def get_local_knowledge(prompt: str) -> str:
