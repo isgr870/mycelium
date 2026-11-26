@@ -1,3 +1,5 @@
+import urllib.error
+import urllib.request
 def get_active_db_path() -> str:
     current_db = globals().get("DB_PATH")
     initial_db = globals().get("_INITIAL_DB_PATH")
@@ -635,8 +637,8 @@ def forward_gossip_to_peers(
             continue
         target = f"{base_url}/mesh/spores/gossip/tick"
         try:
-            req = _urllib_request.Request(target, data=raw, method="POST", headers=headers)
-            with _urllib_request.urlopen(req, timeout=timeout_sec) as resp:
+            req = urllib.request.Request(target, data=raw, method="POST", headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
                 if 200 <= getattr(resp, "status", 200) < 300:
                     forwarded.append(base_url)
                 else:
