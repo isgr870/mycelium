@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+python3 - << 'PY_EOF'
+import json
+import urllib.request
+
+nodes = [
+    ("relay", 8021),
+    ("storage", 8022),
+    ("worker", 8023),
+]
+
+print("=== MYCELIUM (RDDM) CENSUS ===")
+any_up = False
+
+for label, port in nodes:
+    base = f"http://127.0.0.1:{port}"
+    try:
+        with urllib.request.urlopen(f"{base}/mesh/spores/role", timeout=1.5) as r:
+            role_info = json.loads(r.read().decode("utf-8"))
+        any_up = True
+
+        peer_count = None
+        fanout_k = None
+        try:
+            with urllib.request.urlopen(f"{base}/mesh/spores/peers", timeout=1.5) as pr:
+                p_info = json.loads(pr.read().decode("utf-8"))
+                peer_count = p_info.get("peer_count", 0)
+                fanout_k = p_info.get("fanout_k", 6)
+        except Exception:
+            pass
+
+        job_count = None
+        try:
+            with urllib.request.urlopen(f"{base}/mesh/spores/jobs", timeout=1.5) as jr:
+                j_info = json.loads(jr.read().decode("utf-8"))
+                jobs = j_info.get("matching_jobs") or j_info.get("jobs") or []
+                job_count = len(jobs)
+        except Exception:
+            pass
+
+        caps = ",".join(role_info.get("capabilities", []))
+        nid = role_info.get("node_id", f"{label}-01")
+        print(
+            f"[UP  ] {label:7s} :{port} | id={nid} | caps=[{caps}]"
+            + (f" | peers={peer_count} (k={fanout_k})" if peer_count is not None else "")
+            + (f" | jobs={job_count}" if job_count is not None else "")
+        )
+    except Exception:
+        print(f"[DOWN] {label:7s} :{port}")
+
+if not any_up:
+    print("Cluster is offline. Run `mycewake` to start nodes.")
+PY_EOF

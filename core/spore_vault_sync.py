@@ -655,3 +655,55 @@ def recommend_bloom_params(expected_items: int, target_fp_rate: float = 0.01) ->
         "hash_count": hash_count,
         "max_bits": max_bits,
     }
+
+
+import threading as _threading
+
+_GOSSIP_STOP_EVENT = _threading.Event()
+_GOSSIP_THREAD: _threading.Thread | None = None
+
+def _gossip_worker_loop(base_interval: float = 15.0) -> None:
+    while not _GOSSIP_STOP_EVENT.is_set():
+        wait_s = compute_gossip_jitter_seconds(base_interval=base_interval)
+        if _GOSSIP_STOP_EVENT.wait(timeout=wait_s):
+            break
+        try:
+            _seed_peers_from_env()
+            if _PEER_TABLE:
+                gossip_id = f"bg-{int(time.time())}-{_random.randint(1000, 9999)}"
+                if should_forward_gossip(gossip_id=gossip_id, ttl=6):
+                    forward_gossip_to_peers(
+                        gossip_id=gossip_id,
+                        ttl=6,
+                        hop=0,
+                        fanout=max(1, min(int(os.environ.get("MYCELIUM_GOSSIP_FANOUT", 6)), 16)),
+                        data={"source": get_node_role_info().get("node_id", "node")},
+                        timeout_sec=1.0,
+                    )
+        except Exception:
+            # Keep background loop resilient to transient network/peer errors
+            continue
+
+def start_background_gossip_loop(base_interval: float | None = None) -> bool:
+    global _GOSSIP_THREAD
+    if _GOSSIP_THREAD is not None and _GOSSIP_THREAD.is_alive():
+        return False
+    interval = base_interval
+    if interval is None:
+        interval = float(os.environ.get("MYCELIUM_GOSSIP_INTERVAL_SEC", "15.0"))
+    _GOSSIP_STOP_EVENT.clear()
+    t = _threading.Thread(target=_gossip_worker_loop, args=(max(1.0, interval),), daemon=True, name="mycelium-gossip-loop")
+    t.start()
+    _GOSSIP_THREAD = t
+    return True
+
+def stop_background_gossip_loop(timeout: float = 1.0) -> None:
+    _GOSSIP_STOP_EVENT.set()
+    if _GOSSIP_THREAD is not None and _GOSSIP_THREAD.is_alive():
+        _GOSSIP_THREAD.join(timeout=timeout)
+
+@router.on_event("startup")
+async def _mesh_on_startup():
+    flag = os.environ.get("MYCELIUM_AUTO_GOSSIP", "0").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        start_background_gossip_loop()

@@ -137,3 +137,16 @@ def test_bloom_sizing_scales_for_1000_plus_nodes(monkeypatch):
     assert large["size_bits"] >= 8192
     assert large["size_bits"] <= 65536
     assert 3 <= large["hash_count"] <= 8
+
+
+def test_background_gossip_loop_start_and_stop(monkeypatch):
+    import core.spore_vault_sync as svs
+
+    monkeypatch.setenv("MYCELIUM_GOSSIP_INTERVAL_SEC", "1.0")
+    svs._PEER_TABLE.clear()
+    svs._SEEN_GOSSIP_IDS.clear()
+
+    started = svs.start_background_gossip_loop(base_interval=1.0)
+    assert started is True
+    svs.stop_background_gossip_loop(timeout=1.5)
+    assert svs._GOSSIP_STOP_EVENT.is_set()
