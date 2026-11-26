@@ -632,3 +632,26 @@ def forward_gossip_to_peers(
         "next_ttl": next_ttl,
         "next_hop": next_hop,
     }
+
+
+import math as _math
+
+def recommend_bloom_params(expected_items: int, target_fp_rate: float = 0.01) -> Dict[str, int]:
+    n = max(1, int(expected_items))
+    p = min(max(float(target_fp_rate), 1e-5), 0.25)
+    min_bits = max(512, int(os.environ.get("MYCELIUM_BLOOM_MIN_BITS", "512")))
+    max_bits = max(min_bits, int(os.environ.get("MYCELIUM_BLOOM_MAX_BITS", "65536")))
+    # Optimal bit count m = -(n * ln(p)) / (ln(2)^2), rounded up to a power of 2
+    raw_bits = -(n * _math.log(p)) / (_math.log(2.0) ** 2)
+    clamped = max(min_bits, min(max_bits, int(_math.ceil(raw_bits))))
+    pow2 = 1 << (clamped - 1).bit_length()
+    size_bits = max(min_bits, min(max_bits, pow2))
+    optimal_k = int(round((size_bits / n) * _math.log(2.0)))
+    hash_count = max(3, min(8, optimal_k if optimal_k > 0 else 4))
+    return {
+        "expected_items": n,
+        "size_bits": size_bits,
+        "size": size_bits,
+        "hash_count": hash_count,
+        "max_bits": max_bits,
+    }

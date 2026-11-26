@@ -124,3 +124,16 @@ def test_active_gossip_forwarder_handles_unreachable_peer(monkeypatch):
     assert report["failed_count"] == 1
     assert report["next_ttl"] == 3
     assert report["next_hop"] == 1
+
+
+def test_bloom_sizing_scales_for_1000_plus_nodes(monkeypatch):
+    import core.spore_vault_sync as svs
+
+    monkeypatch.setenv("MYCELIUM_BLOOM_MAX_BITS", "65536")
+    small = svs.recommend_bloom_params(10)
+    large = svs.recommend_bloom_params(1500)
+
+    assert large["size_bits"] > small["size_bits"]
+    assert large["size_bits"] >= 8192
+    assert large["size_bits"] <= 65536
+    assert 3 <= large["hash_count"] <= 8
