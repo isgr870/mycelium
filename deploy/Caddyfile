@@ -1,20 +1,13 @@
-# Production Reverse Proxy with Automatic HTTPS / WSS Termination
-mesh.yourdomain.com {
-    encode gzip zstd
+# Replace relay.example.com with your public domain or IP-mapped hostname
+relay.example.com {
+	encode gzip zstd
 
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
-        Referrer-Policy "no-referrer"
-    }
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
 
-    request_body {
-        max_size 64KB
-    }
-
-    reverse_proxy 127.0.0.1:8000 {
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+	reverse_proxy 127.0.0.1:8000
 }

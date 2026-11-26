@@ -1,0 +1,11 @@
+{
+  "name": "Mycelium (rddm) Mesh Console",
+  "short_name": "Mycelium",
+  "description": "Offline-first, censorship-resistant decentralized mesh and spore replication console.",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0c0f0d",
+  "theme_color": "#10b981",
+  "icons": []
+}

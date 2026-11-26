@@ -13,6 +13,8 @@
     pre { background: #090c0a; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 0.85rem; }
     button { background: #10b981; color: #052e16; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; }
   </style>
+  <link rel="manifest" href="/app/manifest.json" />
+  <meta name="theme-color" content="#10b981" />
 </head>
 <body>
   <h1>Mycelium (rddm) — Mesh & Spore Console</h1>
@@ -43,6 +45,13 @@
       }
     }
     refreshAll();
+  </script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/app/sw.js").catch(() => {});
+      });
+    }
   </script>
 </body>
 </html>

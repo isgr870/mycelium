@@ -256,5 +256,15 @@ async def mesh_web_console():
         return _HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
     return _HTMLResponse(content="<h1>Mycelium Node Active</h1>", status_code=200)
 
+@app.get("/app/manifest.json")
+async def mesh_pwa_manifest():
+    p = _Path(__file__).resolve().parent / "web" / "manifest.json"
+    return JSONResponse(content=json.loads(p.read_text(encoding="utf-8")))
+
+@app.get("/app/sw.js")
+async def mesh_pwa_sw():
+    p = _Path(__file__).resolve().parent / "web" / "sw.js"
+    return _HTMLResponse(content=p.read_text(encoding="utf-8"), media_type="application/javascript")
+
 if __name__ == "__main__":
     uvicorn.run(app, host=os.environ.get("MYCELIUM_HOST", "127.0.0.1"), port=int(os.environ.get("MYCELIUM_PORT", "8000")))
