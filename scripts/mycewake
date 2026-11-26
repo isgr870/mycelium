@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec /data/data/com.termux/files/home/mycelium/scripts/start_cluster.sh start

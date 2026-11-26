@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+/data/data/com.termux/files/home/mycelium/scripts/start_cluster.sh stop
+# Also clear any stray node.py processes belonging to mycelium
+pkill -f "/data/data/com.termux/files/home/mycelium/node.py" 2>/dev/null || true
+echo "Mycelium network switched off."
