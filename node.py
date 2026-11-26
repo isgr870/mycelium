@@ -71,6 +71,15 @@ from core.security_hardening import (
 SECRET_KEY = validate_production_environment(strict=True)
 app.add_middleware(PayloadAndRateLimitMiddleware, max_bytes=65536, rate_per_min=120)
 ws_guard = WebSocketGuard(max_bytes=65536, rate_per_min=240)
+import asyncio
+from core.wan_mesh import router as wan_router, sync_with_bootstrap_peers
+
+app.include_router(wan_router)
+
+@app.on_event("startup")
+async def _start_wan_mesh():
+    public_url = os.environ.get("MYCELIUM_PUBLIC_URL", "").strip()
+    asyncio.create_task(sync_with_bootstrap_peers(self_url=public_url))
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def get_local_knowledge(prompt: str) -> str:
@@ -232,4 +241,4 @@ async def handle_prompt(request: Request):
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=os.environ.get("MYCELIUM_HOST", "127.0.0.1"), port=int(os.environ.get("MYCELIUM_PORT", "8000")))
