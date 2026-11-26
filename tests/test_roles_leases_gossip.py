@@ -150,3 +150,51 @@ def test_background_gossip_loop_start_and_stop(monkeypatch):
     assert started is True
     svs.stop_background_gossip_loop(timeout=1.5)
     assert svs._GOSSIP_STOP_EVENT.is_set()
+
+
+def test_multihop_gossip_ttl_hop_and_dedup(monkeypatch, tmp_path):
+    secret = "c" * 64
+    monkeypatch.setenv("MYCELIUM_SECRET_KEY", secret)
+    monkeypatch.setenv("MYCELIUM_GOSSIP_FANOUT", "6")
+    monkeypatch.setattr("core.spore_vault_sync.DB_PATH", str(tmp_path / "multihop.db"))
+
+    app = FastAPI()
+    app.include_router(spore_router)
+    client = TestClient(app)
+
+    for i in range(10):
+        raw_p, hdr_p = _signed_headers(secret, {"url": f"http://10.50.0.{i+1}:8000", "role": "relay"})
+        assert client.post("/mesh/spores/peers/register", content=raw_p, headers=hdr_p).status_code == 200
+
+    # Hop 0 with TTL 4 -> accepted, ttl_remaining=3, hop=1
+    raw_h0, hdr_h0 = _signed_headers(secret, {"gossip_id": "chain-01", "ttl": 4, "hop": 0, "fanout": 6})
+    r0 = client.post("/mesh/spores/gossip/tick", content=raw_h0, headers=hdr_h0).json()
+    assert r0["accepted_for_forward"] is True
+    assert r0["ttl_remaining"] == 3
+    assert r0["hop"] == 1
+
+    # Duplicate gossip_id on next tick -> rejected
+    raw_dup, hdr_dup = _signed_headers(secret, {"gossip_id": "chain-01", "ttl": 3, "hop": 1, "fanout": 6})
+    r_dup = client.post("/mesh/spores/gossip/tick", content=raw_dup, headers=hdr_dup).json()
+    assert r_dup["accepted_for_forward"] is False
+
+    # Fresh gossip_id at TTL=1 -> accepted with ttl_remaining=0
+    raw_ttl1, hdr_ttl1 = _signed_headers(secret, {"gossip_id": "chain-ttl1", "ttl": 1, "hop": 3, "fanout": 6})
+    r_ttl1 = client.post("/mesh/spores/gossip/tick", content=raw_ttl1, headers=hdr_ttl1).json()
+    assert r_ttl1["accepted_for_forward"] is True
+    assert r_ttl1["ttl_remaining"] == 0
+    assert r_ttl1["hop"] == 4
+
+
+def test_stale_peer_eviction(monkeypatch):
+    import core.spore_vault_sync as svs
+
+    svs._PEER_TABLE.clear()
+    now = time.time()
+    svs._PEER_TABLE["http://10.99.0.1:8000"] = {"url": "http://10.99.0.1:8000", "last_seen": now - 900}
+    svs._PEER_TABLE["http://10.99.0.2:8000"] = {"url": "http://10.99.0.2:8000", "last_seen": now - 10}
+
+    evicted = svs.prune_stale_peers(max_age_seconds=300)
+    assert evicted == 1
+    assert "http://10.99.0.1:8000" not in svs._PEER_TABLE
+    assert "http://10.99.0.2:8000" in svs._PEER_TABLE

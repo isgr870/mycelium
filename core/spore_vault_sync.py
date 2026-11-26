@@ -478,7 +478,28 @@ def register_peer(url: str, role: str = "peer", node_id: str | None = None) -> D
     _PEER_TABLE[clean] = entry
     return entry
 
+
+def prune_stale_peers(max_age_seconds: float | None = None) -> int:
+    ttl_sec = max_age_seconds
+    if ttl_sec is None:
+        try:
+            ttl_sec = float(os.environ.get("MYCELIUM_PEER_TTL_SEC", "300.0"))
+        except ValueError:
+            ttl_sec = 300.0
+    if ttl_sec <= 0:
+        return 0
+    now = time.time()
+    stale_keys = [
+        key
+        for key, meta in _PEER_TABLE.items()
+        if isinstance(meta, dict) and (now - float(meta.get("last_seen", now))) > ttl_sec
+    ]
+    for key in stale_keys:
+        _PEER_TABLE.pop(key, None)
+    return len(stale_keys)
+
 def select_gossip_peers(fanout: int = 6) -> List[Dict[str, Any]]:
+    prune_stale_peers()
     _seed_peers_from_env()
     effective_k = max(1, min(int(os.environ.get("MYCELIUM_GOSSIP_FANOUT", fanout)), 16))
     peers = list(_PEER_TABLE.values())
