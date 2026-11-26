@@ -1,3 +1,42 @@
+def get_active_db_path() -> str:
+    current_db = globals().get("DB_PATH")
+    initial_db = globals().get("_INITIAL_DB_PATH")
+    if isinstance(current_db, str) and current_db and current_db != initial_db:
+        p = Path(current_db).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p)
+    explicit = os.environ.get("MYCELIUM_DB_PATH", "").strip()
+    if explicit:
+        p = Path(explicit).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p)
+    data_dir = os.environ.get("MYCELIUM_DATA_DIR", "").strip()
+    if data_dir:
+        p = Path(data_dir).expanduser() / "ledger.db"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p)
+    if "get_db_path" in globals() and callable(globals()["get_db_path"]):
+        return str(globals()["get_db_path"]("ledger.db"))
+    default_db = os.path.join(os.path.expanduser("~/mycelium"), "ledger.db")
+    return str(Path(current_db or default_db).expanduser())
+
+def recommended_bloom_config(spore_count: int) -> tuple[int, int]:
+    if spore_count <= 64:
+        return 512, 3
+    bits = min(16384, max(512, int(spore_count * 10)))
+    # Round up to multiple of 64 for clean bit arrays
+    bits = ((bits + 63) // 64) * 64
+    hashes = 5 if bits >= 2048 else 4
+    return bits, hashes
+
+def get_node_role_info() -> dict:
+    role = os.environ.get("MYCELIUM_ROLE", "worker").strip() or "worker"
+    raw_caps = os.environ.get("MYCELIUM_CAPABILITIES", "general,sync")
+    caps = [c.strip() for c in raw_caps.split(",") if c.strip()]
+    node_id = os.environ.get("MYCELIUM_NODE_ID") or f"{role}-{os.uname().nodename}"
+    return {"node_id": node_id, "role": role, "capabilities": caps}
+
+from pathlib import Path
 import os
 import json
 import time
@@ -12,6 +51,7 @@ router = APIRouter(prefix="/mesh/spores", tags=["spores"])
 
 DIR = os.path.expanduser("~/mycelium")
 DB_PATH = os.path.join(DIR, "ledger.db")
+_INITIAL_DB_PATH = DB_PATH
 MAX_CLOCK_SKEW_SECONDS = 120
 
 
@@ -21,7 +61,7 @@ def _enable_wal(conn: sqlite3.Connection) -> None:
 
 
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=15.0)
+    conn = sqlite3.connect(get_active_db_path(), timeout=15.0)
     _enable_wal(conn)
     conn.execute(
         """
@@ -240,4 +280,278 @@ async def pull_missing_spores(request: Request):
     return {
         "count": len(missing),
         "spores": missing[:50],
+    }
+
+
+def _extract_job_envelope(spore: Dict[str, Any]) -> Dict[str, Any]:
+    content = spore.get("content")
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
+
+def create_job_spore(
+    goal_id: str,
+    job_type: str,
+    task_payload: Dict[str, Any],
+    author_node: str = "coordinator",
+    lease_seconds: int = 120,
+) -> Dict[str, Any]:
+    now = int(time.time())
+    job_id = f"job-{now}-{hashlib.sha256(f'{goal_id}:{job_type}:{now}:{json.dumps(task_payload, sort_keys=True)}'.encode()).hexdigest()[:12]}"
+    body = {
+        "kind": "job",
+        "job_id": job_id,
+        "goal_id": goal_id,
+        "job_type": job_type,
+        "status": "queued",
+        "lease_owner": None,
+        "lease_expires_at": 0,
+        "task": task_payload,
+        "created_at": now,
+    }
+    return store_spore(topic=f"job.{job_type}", content=body, author_node=author_node)
+
+def list_jobs(job_type: str | None = None, include_expired: bool = True) -> list[dict[str, Any]]:
+    now = int(time.time())
+    spores = sorted(
+        list_spores(limit=1000),
+        key=lambda s: (float(s.get("created_at", 0)), str(s.get("spore_id", ""))),
+    )
+    jobs_by_id: dict[str, dict[str, Any]] = {}
+    for sp in spores:
+        data = _extract_job_envelope(sp)
+        if data.get("kind") != "job":
+            continue
+        jid = data.get("job_id")
+        if not jid:
+            continue
+        if job_type and data.get("job_type") != job_type:
+            continue
+        current = dict(data)
+        current["spore_id"] = sp.get("spore_id")
+        expired = bool(current.get("lease_expires_at") and int(current["lease_expires_at"]) <= now)
+        if current.get("status") == "claimed" and expired and include_expired:
+            current["status"] = "queued"
+            current["lease_owner"] = None
+            current["lease_expires_at"] = 0
+        jobs_by_id[jid] = current
+    return list(jobs_by_id.values())
+
+def claim_job_spore(job_id: str, worker_id: str, lease_seconds: int = 120) -> dict[str, Any]:
+    now = int(time.time())
+    jobs = {j["job_id"]: j for j in list_jobs(include_expired=True)}
+    job = jobs.get(job_id)
+    if not job:
+        return {"claimed": False, "reason": "job_not_found", "job_id": job_id}
+    if job.get("status") == "completed":
+        return {"claimed": False, "reason": "already_completed", "job_id": job_id}
+    if job.get("status") == "claimed" and int(job.get("lease_expires_at") or 0) > now:
+        return {
+            "claimed": False,
+            "reason": "leased_by_another_worker",
+            "job_id": job_id,
+            "lease_owner": job.get("lease_owner"),
+            "lease_expires_at": job.get("lease_expires_at"),
+        }
+    updated = dict(job)
+    updated.pop("spore_id", None)
+    updated["status"] = "claimed"
+    updated["lease_owner"] = worker_id
+    updated["lease_expires_at"] = now + max(15, int(lease_seconds))
+    updated["claimed_at"] = now
+    rec = store_spore(topic=f"job.{updated['job_type']}", content=updated, author_node=worker_id)
+    return {"claimed": True, "job_id": job_id, "job": updated, "spore_id": rec.get("spore_id")}
+
+def complete_job_spore(job_id: str, worker_id: str, result_payload: dict[str, Any]) -> dict[str, Any]:
+    now = int(time.time())
+    jobs = {j["job_id"]: j for j in list_jobs(include_expired=True)}
+    job = jobs.get(job_id)
+    if not job:
+        return {"completed": False, "reason": "job_not_found", "job_id": job_id}
+    updated = dict(job)
+    updated.pop("spore_id", None)
+    updated["status"] = "completed"
+    updated["completed_by"] = worker_id
+    updated["completed_at"] = now
+    updated["result"] = result_payload
+    rec = store_spore(topic=f"job.{updated['job_type']}", content=updated, author_node=worker_id)
+    return {"completed": True, "job_id": job_id, "job": updated, "spore_id": rec.get("spore_id")}
+
+@router.get("/role")
+async def mesh_role_status():
+    info = get_node_role_info()
+    spores = list_spores(limit=1000)
+    bits, hashes = recommended_bloom_config(len(spores))
+    return {
+        **info,
+        "db_path": get_active_db_path(),
+        "spore_count": len(spores),
+        "recommended_bloom": {"size": bits, "hash_count": hashes},
+    }
+
+@router.get("/jobs")
+async def mesh_list_jobs(job_type: str | None = None):
+    info = get_node_role_info()
+    jobs = list_jobs(job_type=job_type)
+    matching = [j for j in jobs if j.get("job_type") in info["capabilities"] or "general" in info["capabilities"]]
+    return {"node": info, "jobs": jobs, "matching_jobs": matching}
+
+@router.post("/jobs/create")
+async def mesh_create_job(request: Request):
+    raw_body = await request.body()
+    sig = request.headers.get("X-Mycelium-Signature", "")
+    payload = _verify_signed_request(raw_body, sig)
+    goal_id = str(payload.get("goal_id", "mycelium-core-goal"))
+    job_type = str(payload.get("job_type", "general"))
+    task = payload.get("task", {})
+    author = str(payload.get("author_node", get_node_role_info()["node_id"]))
+    lease_sec = int(payload.get("lease_seconds", 120))
+    rec = create_job_spore(goal_id=goal_id, job_type=job_type, task_payload=task, author_node=author, lease_seconds=lease_sec)
+    created_jobs = [j for j in list_jobs(job_type=job_type) if j.get("spore_id") == rec.get("spore_id")]
+    if created_jobs:
+        job_obj = created_jobs[-1]
+    else:
+        job_obj = {
+            "kind": "job",
+            "job_id": rec.get("spore_id", "")[:16],
+            "goal_id": goal_id,
+            "job_type": job_type,
+            "status": "queued",
+            "lease_owner": None,
+            "lease_expires_at": 0,
+            "task": task,
+            "spore_id": rec.get("spore_id"),
+        }
+    return {"status": "queued", "spore_id": rec.get("spore_id"), "job": job_obj}
+
+@router.post("/jobs/claim")
+async def mesh_claim_job(request: Request):
+    raw_body = await request.body()
+    sig = request.headers.get("X-Mycelium-Signature", "")
+    payload = _verify_signed_request(raw_body, sig)
+    job_id = str(payload.get("job_id", ""))
+    worker_id = str(payload.get("worker_id", get_node_role_info()["node_id"]))
+    lease_sec = int(payload.get("lease_seconds", 120))
+    return claim_job_spore(job_id=job_id, worker_id=worker_id, lease_seconds=lease_sec)
+
+@router.post("/jobs/complete")
+async def mesh_complete_job(request: Request):
+    raw_body = await request.body()
+    sig = request.headers.get("X-Mycelium-Signature", "")
+    payload = _verify_signed_request(raw_body, sig)
+    job_id = str(payload.get("job_id", ""))
+    worker_id = str(payload.get("worker_id", get_node_role_info()["node_id"]))
+    result = payload.get("result", {})
+    return complete_job_spore(job_id=job_id, worker_id=worker_id, result_payload=result)
+
+import random as _random
+
+_PEER_TABLE: Dict[str, Dict[str, Any]] = {}
+_SEEN_GOSSIP_IDS: set[str] = set()
+
+def _seed_peers_from_env() -> None:
+    raw = os.environ.get("MYCELIUM_BOOTSTRAP_PEERS", "")
+    for item in raw.split(","):
+        url = item.strip().rstrip("/")
+        if url and url not in _PEER_TABLE:
+            _PEER_TABLE[url] = {
+                "url": url,
+                "role": "bootstrap",
+                "last_seen": int(time.time()),
+            }
+
+def register_peer(url: str, role: str = "peer", node_id: str | None = None) -> Dict[str, Any]:
+    clean = url.strip().rstrip("/")
+    now = int(time.time())
+    entry = _PEER_TABLE.get(clean, {"url": clean, "role": role})
+    entry["role"] = role or entry.get("role", "peer")
+    if node_id:
+        entry["node_id"] = node_id
+    entry["last_seen"] = now
+    _PEER_TABLE[clean] = entry
+    return entry
+
+def select_gossip_peers(fanout: int = 6) -> List[Dict[str, Any]]:
+    _seed_peers_from_env()
+    effective_k = max(1, min(int(os.environ.get("MYCELIUM_GOSSIP_FANOUT", fanout)), 16))
+    peers = list(_PEER_TABLE.values())
+    if len(peers) <= effective_k:
+        return peers
+    return _random.sample(peers, effective_k)
+
+def should_forward_gossip(gossip_id: str, ttl: int = 8) -> bool:
+    if not gossip_id or ttl <= 0:
+        return False
+    if gossip_id in _SEEN_GOSSIP_IDS:
+        return False
+    if len(_SEEN_GOSSIP_IDS) > 20000:
+        # Trim oldest quarter when cap is reached to bound memory at 1,000+ nodes
+        trimmed = list(_SEEN_GOSSIP_IDS)[5000:]
+        _SEEN_GOSSIP_IDS.clear()
+        _SEEN_GOSSIP_IDS.update(trimmed)
+    _SEEN_GOSSIP_IDS.add(gossip_id)
+    return True
+
+def compute_gossip_jitter_seconds(base_interval: float = 15.0, jitter_ratio: float = 0.25) -> float:
+    delta = base_interval * jitter_ratio
+    return max(0.5, base_interval + _random.uniform(-delta, delta))
+
+@router.get("/peers")
+async def mesh_list_peers():
+    _seed_peers_from_env()
+    peers = list(_PEER_TABLE.values())
+    return {
+        "node": get_node_role_info(),
+        "fanout_k": max(1, min(int(os.environ.get("MYCELIUM_GOSSIP_FANOUT", 6)), 16)),
+        "peer_count": len(peers),
+        "peers": peers[:200],
+    }
+
+@router.post("/peers/register")
+async def mesh_register_peer(request: Request):
+    raw_body = await request.body()
+    sig = request.headers.get("X-Mycelium-Signature", "")
+    payload = _verify_signed_request(raw_body, sig)
+    url = str(payload.get("url", "")).strip()
+    if not url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing peer url.")
+    entry = register_peer(
+        url=url,
+        role=str(payload.get("role", "peer")),
+        node_id=payload.get("node_id"),
+    )
+    incoming_peers = payload.get("peers", [])
+    if isinstance(incoming_peers, list):
+        for p in incoming_peers[:50]:
+            if isinstance(p, dict) and p.get("url"):
+                register_peer(str(p["url"]), role=str(p.get("role", "peer")), node_id=p.get("node_id"))
+    return {"status": "registered", "peer": entry, "peer_count": len(_PEER_TABLE)}
+
+@router.post("/gossip/tick")
+async def mesh_gossip_tick(request: Request):
+    raw_body = await request.body()
+    sig = request.headers.get("X-Mycelium-Signature", "")
+    payload = _verify_signed_request(raw_body, sig)
+    gossip_id = str(payload.get("gossip_id", ""))
+    ttl = int(payload.get("ttl", 8))
+    hop = int(payload.get("hop", 0))
+    if not gossip_id:
+        gossip_id = hashlib.sha256(raw_body).hexdigest()[:16]
+    forward = should_forward_gossip(gossip_id=gossip_id, ttl=ttl)
+    sampled = select_gossip_peers(fanout=int(payload.get("fanout", 6)))
+    return {
+        "gossip_id": gossip_id,
+        "accepted_for_forward": forward,
+        "ttl_remaining": max(0, ttl - 1),
+        "hop": hop + 1,
+        "sampled_fanout": len(sampled),
+        "sampled_peers": [p.get("url") for p in sampled],
+        "next_jitter_seconds": round(compute_gossip_jitter_seconds(), 2),
     }
