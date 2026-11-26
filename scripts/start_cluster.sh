@@ -64,6 +64,59 @@ stop_cluster() {
   fi
 }
 
+
+register_cluster_peers() {
+  python3 - << 'REG_EOF'
+import json
+import os
+import time
+import urllib.request
+from core.security_hardening import sign_packet
+
+nodes = [
+    ("relay", "relay-01", "http://127.0.0.1:8021"),
+    ("storage", "storage-01", "http://127.0.0.1:8022"),
+    ("worker", "worker-01", "http://127.0.0.1:8023"),
+]
+secret = os.environ.get("MYCELIUM_SECRET_KEY", "")
+
+for _, _, url in nodes:
+    for _ in range(40):
+        try:
+            with urllib.request.urlopen(f"{url}/mesh/spores/role", timeout=1) as r:
+                if r.status == 200:
+                    break
+        except Exception:
+            time.sleep(0.25)
+
+peer_entries = [{"url": u, "role": r, "node_id": nid} for r, nid, u in nodes]
+for _, _, target_base in nodes:
+    for entry in peer_entries:
+        payload = {
+            "url": entry["url"],
+            "role": entry["role"],
+            "node_id": entry["node_id"],
+            "peers": peer_entries,
+        }
+        raw = json.dumps({"ts": int(time.time()), "payload": payload}, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if secret:
+            headers["X-Mycelium-Signature"] = sign_packet(raw, secret)
+        try:
+            req = urllib.request.Request(
+                f"{target_base}/mesh/spores/peers/register",
+                data=raw,
+                method="POST",
+                headers=headers,
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                resp.read()
+        except Exception:
+            pass
+print("Auto-registered relay, storage, and worker peers.")
+REG_EOF
+}
+
 status_cluster() {
   for port in 8021 8022 8023; do
     if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/mesh/spores/role', timeout=1)" >/dev/null 2>&1; then
@@ -82,7 +135,7 @@ case "$cmd" in
     start_node "relay" "relay" "gossip,relay,sync" "8021"
     start_node "storage" "storage" "vault,archive,sync" "8022"
     start_node "worker" "worker" "compute,sync" "8023"
-    sleep 1
+    register_cluster_peers
     status_cluster
     ;;
   stop)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python3 - << 'PY_EOF'
+python3 - << 'CENSUS_PY_EOF'
 import json
 import urllib.request
 
@@ -31,12 +31,15 @@ for label, port in nodes:
         except Exception:
             pass
 
-        job_count = None
+        job_summary = None
         try:
             with urllib.request.urlopen(f"{base}/mesh/spores/jobs", timeout=1.5) as jr:
                 j_info = json.loads(jr.read().decode("utf-8"))
                 jobs = j_info.get("matching_jobs") or j_info.get("jobs") or []
-                job_count = len(jobs)
+                q_cnt = sum(1 for j in jobs if str(j.get("status", "")).lower() == "queued")
+                c_cnt = sum(1 for j in jobs if str(j.get("status", "")).lower() == "claimed")
+                d_cnt = sum(1 for j in jobs if str(j.get("status", "")).lower() in {"completed", "done"})
+                job_summary = f"{len(jobs)} (q={q_cnt}, c={c_cnt}, d={d_cnt})"
         except Exception:
             pass
 
@@ -45,11 +48,11 @@ for label, port in nodes:
         print(
             f"[UP  ] {label:7s} :{port} | id={nid} | caps=[{caps}]"
             + (f" | peers={peer_count} (k={fanout_k})" if peer_count is not None else "")
-            + (f" | jobs={job_count}" if job_count is not None else "")
+            + (f" | jobs={job_summary}" if job_summary is not None else "")
         )
     except Exception:
         print(f"[DOWN] {label:7s} :{port}")
 
 if not any_up:
     print("Cluster is offline. Run `mycewake` to start nodes.")
-PY_EOF
+CENSUS_PY_EOF
