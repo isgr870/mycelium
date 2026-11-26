@@ -702,8 +702,14 @@ def stop_background_gossip_loop(timeout: float = 1.0) -> None:
     if _GOSSIP_THREAD is not None and _GOSSIP_THREAD.is_alive():
         _GOSSIP_THREAD.join(timeout=timeout)
 
-@router.on_event("startup")
-async def _mesh_on_startup():
+from contextlib import asynccontextmanager as _asynccontextmanager
+
+@_asynccontextmanager
+async def _mesh_router_lifespan(_router):
     flag = os.environ.get("MYCELIUM_AUTO_GOSSIP", "0").strip().lower()
     if flag in {"1", "true", "yes", "on"}:
         start_background_gossip_loop()
+    yield
+    stop_background_gossip_loop(timeout=1.0)
+
+router.lifespan_context = _mesh_router_lifespan

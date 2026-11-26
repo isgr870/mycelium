@@ -59,9 +59,11 @@ stop_cluster() {
       fi
     done
     rm -f "$PID_FILE"
+  fi
   else
     echo "No active cluster PID file at $PID_FILE"
   fi
+  release_wakelock
 }
 
 
@@ -117,6 +119,19 @@ print("Auto-registered relay, storage, and worker peers.")
 REG_EOF
 }
 
+
+acquire_wakelock() {
+  if command -v termux-wake-lock >/dev/null 2>&1; then
+    termux-wake-lock >/dev/null 2>&1 && echo "Acquired Termux wake-lock." || true
+  fi
+}
+
+release_wakelock() {
+  if command -v termux-wake-unlock >/dev/null 2>&1; then
+    termux-wake-unlock >/dev/null 2>&1 && echo "Released Termux wake-lock." || true
+  fi
+}
+
 status_cluster() {
   for port in 8021 8022 8023; do
     if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/mesh/spores/role', timeout=1)" >/dev/null 2>&1; then
@@ -132,6 +147,7 @@ case "$cmd" in
     stop_cluster
     mkdir -p "$CLUSTER_DIR"
     : > "$PID_FILE"
+    acquire_wakelock
     start_node "relay" "relay" "gossip,relay,sync" "8021"
     start_node "storage" "storage" "vault,archive,sync" "8022"
     start_node "worker" "worker" "compute,sync" "8023"
