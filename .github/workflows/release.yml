@@ -1,0 +1,133 @@
+name: Build & Release Mycelium Packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+        default: "v0.1.0-alpha"
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-desktop-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies & PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest pyinstaller httpx fastapi uvicorn
+
+      - name: Run test suite
+        shell: bash
+        env:
+          MYCELIUM_SECRET_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        run: PYTHONPATH=. pytest -v
+
+      - name: Build standalone binary
+        shell: bash
+        env:
+          MYCELIUM_SECRET_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        run: python scripts/build_binary.py
+
+      - name: Stage platform release artifact
+        shell: bash
+        run: |
+          mkdir -p release_assets
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp dist/mycelium-node.exe release_assets/mycelium-windows-x64.exe
+          else
+            cp dist/mycelium-node release_assets/mycelium-linux-x64
+            chmod +x release_assets/mycelium-linux-x64
+          fi
+
+      - name: Upload desktop binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: release_assets/*
+
+  build-android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Buildozer system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          pip install --upgrade pip buildozer cython==0.29.36
+
+      - name: Create default buildozer.spec if missing
+        run: |
+          if [ ! -f buildozer.spec ]; then
+            buildozer init
+            sed -i 's/title = My Application/title = Mycelium/' buildozer.spec
+            sed -i 's/package.name = myapp/package.name = mycelium/' buildozer.spec
+            sed -i 's/package.domain = org.test/package.domain = org.rddm/' buildozer.spec
+          fi
+
+      - name: Build debug APK
+        run: buildozer android debug
+
+      - name: Stage APK
+        run: |
+          mkdir -p release_assets
+          cp bin/*.apk release_assets/mycelium-android-debug.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: release_assets/*.apk
+
+  publish-github-release:
+    needs: [test-and-desktop-binaries, build-android-apk]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded_artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir -p final_release
+          find downloaded_artifacts -type f \( -name "*.exe" -o -name "mycelium-linux-*" -o -name "*.apk" \) -exec cp {} final_release/ \;
+          ls -lh final_release/
+
+      - name: Create GitHub Release & attach assets
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          name: Mycelium (rddm) ${{ github.event.inputs.tag_name || github.ref_name }}
+          files: final_release/*
+          generate_release_notes: true
