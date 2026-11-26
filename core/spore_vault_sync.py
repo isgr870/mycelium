@@ -34,6 +34,17 @@ def _get_conn() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knowledge (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL,
+            title TEXT,
+            content TEXT,
+            embedding_json TEXT
+        )
+        """
+    )
     conn.commit()
     return conn
 
