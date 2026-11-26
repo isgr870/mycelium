@@ -245,5 +245,16 @@ async def handle_prompt(request: Request):
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
+
+from pathlib import Path as _Path
+from fastapi.responses import HTMLResponse as _HTMLResponse
+
+@app.get("/app", response_class=_HTMLResponse)
+async def mesh_web_console():
+    ui_path = _Path(__file__).resolve().parent / "web" / "index.html"
+    if ui_path.exists():
+        return _HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
+    return _HTMLResponse(content="<h1>Mycelium Node Active</h1>", status_code=200)
+
 if __name__ == "__main__":
     uvicorn.run(app, host=os.environ.get("MYCELIUM_HOST", "127.0.0.1"), port=int(os.environ.get("MYCELIUM_PORT", "8000")))

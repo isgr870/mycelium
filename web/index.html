@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mycelium (rddm) Mesh Console</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0c0f0d; color: #e6efe9; margin: 0; padding: 24px; }
+    .card { background: #141a16; border: 1px solid #26332a; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 1.4rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .metric { font-size: 1.5rem; font-weight: 700; color: #6ee7b7; }
+    pre { background: #090c0a; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 0.85rem; }
+    button { background: #10b981; color: #052e16; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Mycelium (rddm) — Mesh & Spore Console</h1>
+  <p>Offline-first, censorship-resistant peer & vault status.</p>
+  <div class="grid">
+    <div class="card"><div>Active Peers</div><div id="peersCount" class="metric">-</div></div>
+    <div class="card"><div>Queued Packets</div><div id="queueCount" class="metric">-</div></div>
+    <div class="card"><div>Replicated Spores</div><div id="sporeCount" class="metric">-</div></div>
+  </div>
+  <div class="card">
+    <button onclick="refreshAll()">Refresh Telemetry</button>
+    <pre id="rawOut">Loading mesh telemetry...</pre>
+  </div>
+  <script>
+    async function refreshAll() {
+      try {
+        const [peers, res, spores] = await Promise.all([
+          fetch('/mesh/peers').then(r => r.json()),
+          fetch('/mesh/resilience/status').then(r => r.json()),
+          fetch('/mesh/spores/manifest').then(r => r.json())
+        ]);
+        document.getElementById('peersCount').textContent = peers.count ?? 0;
+        document.getElementById('queueCount').textContent = res.queued_packets ?? 0;
+        document.getElementById('sporeCount').textContent = spores.count ?? 0;
+        document.getElementById('rawOut').textContent = JSON.stringify({ peers, resilience: res, spores }, null, 2);
+      } catch (err) {
+        document.getElementById('rawOut').textContent = 'Error loading telemetry: ' + err;
+      }
+    }
+    refreshAll();
+  </script>
+</body>
+</html>
