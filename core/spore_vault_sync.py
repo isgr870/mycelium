@@ -601,7 +601,10 @@ def forward_gossip_to_peers(
     raw = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if secret:
-        headers["X-Mycelium-Signature"] = sign_packet(raw, secret)
+        _sign_fn = globals().get("sign_packet")
+        if not callable(_sign_fn):
+            from core.security_hardening import sign_packet as _sign_fn
+        headers["X-Mycelium-Signature"] = _sign_fn(raw, secret)
 
     forwarded: List[str] = []
     failed: List[Dict[str, str]] = []
