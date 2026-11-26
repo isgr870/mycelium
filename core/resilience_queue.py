@@ -6,7 +6,7 @@ import sqlite3
 import httpx
 from typing import Dict, Any, List
 from fastapi import APIRouter
-from core.security_hardening import sign_packet, ensure_wal_mode
+from core.security_hardening import sign_packet
 from core.wan_mesh import PEER_REGISTRY, prune_stale_peers
 
 router = APIRouter(prefix="/mesh/resilience", tags=["resilience"])
@@ -15,9 +15,14 @@ DIR = os.path.expanduser("~/mycelium")
 DB_PATH = os.path.join(DIR, "ledger.db")
 
 
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+
+
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=15.0)
-    ensure_wal_mode(conn)
+    _enable_wal(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS outbound_queue (

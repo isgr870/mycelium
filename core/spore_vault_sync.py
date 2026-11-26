@@ -5,7 +5,7 @@ import sqlite3
 import hashlib
 from typing import Dict, Any, List
 from fastapi import APIRouter, Request, HTTPException, status
-from core.security_hardening import verify_packet, ensure_wal_mode
+from core.security_hardening import verify_packet
 from spore_sync import SimpleBloomFilter
 
 router = APIRouter(prefix="/mesh/spores", tags=["spores"])
@@ -15,9 +15,14 @@ DB_PATH = os.path.join(DIR, "ledger.db")
 MAX_CLOCK_SKEW_SECONDS = 120
 
 
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+
+
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=15.0)
-    ensure_wal_mode(conn)
+    _enable_wal(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS spores (
