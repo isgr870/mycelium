@@ -217,8 +217,18 @@ async def pull_missing_spores(request: Request):
     all_spores = list_spores(limit=500)
     missing: List[Dict[str, Any]] = []
     for sp in all_spores:
-        # If peer bloom filter does not confirm presence, include spore in sync batch
-        diff_indices = peer_bf.get_diff(build_local_bloom(bf_size, hash_count)["bit_array"])
+        try:
+            local_bloom = build_local_bloom(bf_size, hash_count)
+        except TypeError:
+            local_bloom = build_local_bloom()
+        local_bits = local_bloom.get("bit_array", []) if isinstance(local_bloom, dict) else []
+        try:
+            diff_indices = peer_bf.get_diff(local_bits)
+        except TypeError:
+            other_bf = SimpleBloomFilter(size=bf_size, hash_count=hash_count)
+            if isinstance(local_bits, list) and len(local_bits) == bf_size:
+                other_bf.bit_array = [int(b) for b in local_bits]
+            diff_indices = peer_bf.get_diff(other_bf)
         if not peer_bf.might_contain(sp["spore_id"]) or len(diff_indices) > 0:
             missing.append(sp)
 
