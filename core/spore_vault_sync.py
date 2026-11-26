@@ -229,8 +229,13 @@ async def pull_missing_spores(request: Request):
             if isinstance(local_bits, list) and len(local_bits) == bf_size:
                 other_bf.bit_array = [int(b) for b in local_bits]
             diff_indices = peer_bf.get_diff(other_bf)
-        if not peer_bf.might_contain(sp["spore_id"]) or len(diff_indices) > 0:
-            missing.append(sp)
+        has_spore = False
+        if hasattr(peer_bf, "might_contain"):
+            has_spore = bool(peer_bf.might_contain(sp["spore_id"]))
+        elif hasattr(peer_bf, "contains"):
+            has_spore = bool(peer_bf.contains(sp["spore_id"]))
+        if (not has_spore) or len(diff_indices) > 0:
+                missing.append(sp)
 
     return {
         "count": len(missing),
