@@ -546,6 +546,16 @@ async def mesh_gossip_tick(request: Request):
         gossip_id = hashlib.sha256(raw_body).hexdigest()[:16]
     forward = should_forward_gossip(gossip_id=gossip_id, ttl=ttl)
     sampled = select_gossip_peers(fanout=int(payload.get("fanout", 6)))
+    active_forward = bool(payload.get("active_forward", False))
+    dispatch_report = None
+    if forward and active_forward:
+        dispatch_report = forward_gossip_to_peers(
+            gossip_id=gossip_id,
+            ttl=ttl,
+            hop=hop,
+            fanout=int(payload.get("fanout", 6)),
+            data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+        )
     return {
         "gossip_id": gossip_id,
         "accepted_for_forward": forward,
@@ -554,4 +564,68 @@ async def mesh_gossip_tick(request: Request):
         "sampled_fanout": len(sampled),
         "sampled_peers": [p.get("url") for p in sampled],
         "next_jitter_seconds": round(compute_gossip_jitter_seconds(), 2),
+        "dispatch": dispatch_report,
+    }
+
+
+def forward_gossip_to_peers(
+    gossip_id: str,
+    ttl: int = 8,
+    hop: int = 0,
+    fanout: int = 6,
+    data: Dict[str, Any] | None = None,
+    timeout_sec: float = 1.5,
+) -> Dict[str, Any]:
+    next_ttl = int(ttl) - 1
+    next_hop = int(hop) + 1
+    sampled = select_gossip_peers(fanout=fanout)
+    if next_ttl <= 0 or not sampled:
+        return {
+            "gossip_id": gossip_id,
+            "forwarded_count": 0,
+            "failed_count": 0,
+            "targets": [],
+            "next_ttl": max(0, next_ttl),
+            "next_hop": next_hop,
+        }
+
+    secret = os.environ.get("MYCELIUM_SECRET_KEY", "")
+    child_payload = {
+        "gossip_id": gossip_id,
+        "ttl": next_ttl,
+        "hop": next_hop,
+        "fanout": fanout,
+        "data": data or {},
+    }
+    envelope = {"ts": int(time.time()), "payload": child_payload}
+    raw = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        headers["X-Mycelium-Signature"] = sign_packet(raw, secret)
+
+    forwarded: List[str] = []
+    failed: List[Dict[str, str]] = []
+    for peer in sampled:
+        base_url = str(peer.get("url", "")).rstrip("/")
+        if not base_url:
+            continue
+        target = f"{base_url}/mesh/spores/gossip/tick"
+        try:
+            req = urllib.request.Request(target, data=raw, method="POST", headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                if 200 <= getattr(resp, "status", 200) < 300:
+                    forwarded.append(base_url)
+                else:
+                    failed.append({"url": base_url, "error": f"http_{resp.status}"})
+        except Exception as exc:
+            failed.append({"url": base_url, "error": str(exc)[:120]})
+
+    return {
+        "gossip_id": gossip_id,
+        "forwarded_count": len(forwarded),
+        "failed_count": len(failed),
+        "forwarded_peers": forwarded,
+        "failed_peers": failed,
+        "next_ttl": next_ttl,
+        "next_hop": next_hop,
     }

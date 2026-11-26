@@ -101,3 +101,26 @@ def test_k6_gossip_sampling_and_deduplication(monkeypatch, tmp_path):
     raw_g2, hdr_g2 = _signed_headers(secret, {"gossip_id": "unit-gossip-1", "ttl": 5, "hop": 1, "fanout": 6})
     t2 = client.post("/mesh/spores/gossip/tick", content=raw_g2, headers=hdr_g2).json()
     assert t2["accepted_for_forward"] is False
+
+
+def test_active_gossip_forwarder_handles_unreachable_peer(monkeypatch):
+    import core.spore_vault_sync as svs
+
+    monkeypatch.setenv("MYCELIUM_SECRET_KEY", "b" * 64)
+    svs._PEER_TABLE.clear()
+    svs._SEEN_GOSSIP_IDS.clear()
+    svs.register_peer("http://127.0.0.1:59999", role="worker", node_id="dead-peer")
+
+    report = svs.forward_gossip_to_peers(
+        gossip_id="fwd-test-01",
+        ttl=4,
+        hop=0,
+        fanout=6,
+        data={"msg": "hello-mesh"},
+        timeout_sec=0.2,
+    )
+    assert report["gossip_id"] == "fwd-test-01"
+    assert report["forwarded_count"] == 0
+    assert report["failed_count"] == 1
+    assert report["next_ttl"] == 3
+    assert report["next_hop"] == 1
