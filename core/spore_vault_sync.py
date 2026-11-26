@@ -590,8 +590,8 @@ async def mesh_gossip_tick(request: Request):
 
 
 def forward_gossip_to_peers(
-    import urllib.request as _urlrequest
-    import urllib.error as _urlerror
+    import urllib.error as urllib_error
+    import urllib.request as urllib_request
     gossip_id: str,
     ttl: int = 8,
     hop: int = 0,
@@ -637,8 +637,8 @@ def forward_gossip_to_peers(
             continue
         target = f"{base_url}/mesh/spores/gossip/tick"
         try:
-            req = _urlrequest.Request(target, data=raw, method="POST", headers=headers)
-            with _urlrequest.urlopen(req, timeout=timeout_sec) as resp:
+            req = urllib_request.Request(target, data=raw, method="POST", headers=headers)
+            with urllib_request.urlopen(req, timeout=timeout_sec) as resp:
                 if 200 <= getattr(resp, "status", 200) < 300:
                     forwarded.append(base_url)
                 else:
