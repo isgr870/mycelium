@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag (e.g. v1.0.0)"
+        description: "Release tag (e.g. v0.1.1)"
         required: true
-        default: "v0.1.0-alpha"
+        default: "v0.1.1"
 
 permissions:
   contents: write
@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
@@ -55,6 +55,9 @@ jobs:
           mkdir -p release_assets
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp dist/mycelium-node.exe release_assets/mycelium-windows-x64.exe
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            cp dist/mycelium-node release_assets/mycelium-macos-universal
+            chmod +x release_assets/mycelium-macos-universal
           else
             cp dist/mycelium-node release_assets/mycelium-linux-x64
             chmod +x release_assets/mycelium-linux-x64
@@ -83,13 +86,15 @@ jobs:
           sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
           pip install --upgrade pip buildozer cython==0.29.36
 
-      - name: Create default buildozer.spec if missing
+      - name: Configure buildozer.spec
         run: |
           if [ ! -f buildozer.spec ]; then
             buildozer init
             sed -i 's/title = My Application/title = Mycelium/' buildozer.spec
             sed -i 's/package.name = myapp/package.name = mycelium/' buildozer.spec
             sed -i 's/package.domain = org.test/package.domain = org.rddm/' buildozer.spec
+            sed -i 's/source.include_exts = py,png,jpg,kv,atlas/source.include_exts = py,png,jpg,kv,atlas,html,json,js/' buildozer.spec
+            sed -i 's/requirements = python3,kivy/requirements = python3,fastapi,uvicorn,httpx,starlette,pydantic,anyio,sniffio/' buildozer.spec
           fi
 
       - name: Build debug APK
@@ -119,7 +124,7 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p final_release
-          find downloaded_artifacts -type f \( -name "*.exe" -o -name "mycelium-linux-*" -o -name "*.apk" \) -exec cp {} final_release/ \;
+          find downloaded_artifacts -type f \( -name "*.exe" -o -name "mycelium-linux-*" -o -name "mycelium-macos-*" -o -name "*.apk" \) -exec cp {} final_release/ \;
           ls -lh final_release/
 
       - name: Create GitHub Release & attach assets
