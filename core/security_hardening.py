@@ -121,3 +121,51 @@ def init_wal_sqlite(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=15000;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
+
+# --- Non-breaking key rotation & clock skew helpers ---
+def get_clock_skew_seconds(default: int = 120) -> int:
+    raw = os.environ.get("MYCELIUM_MAX_CLOCK_SKEW_SECONDS", "").strip()
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+    except ValueError:
+        return default
+    return max(5, min(3600, val))
+
+
+def get_signing_secrets(primary_secret: Optional[str] = None) -> list[str]:
+    secrets_list: list[str] = []
+    primary = (
+        primary_secret
+        if primary_secret is not None
+        else os.environ.get("MYCELIUM_SECRET_KEY", "")
+    ).strip()
+    if primary:
+        secrets_list.append(primary)
+
+    secondary = os.environ.get("MYCELIUM_SECONDARY_SECRET_KEY", "").strip()
+    if secondary and secondary not in secrets_list:
+        secrets_list.append(secondary)
+
+    extra_raw = os.environ.get("MYCELIUM_SECRET_KEYS", "")
+    for item in extra_raw.split(","):
+        candidate = item.strip()
+        if candidate and candidate not in secrets_list:
+            secrets_list.append(candidate)
+
+    return secrets_list
+
+
+def verify_packet_with_rotation(
+    payload: bytes,
+    signature: str,
+    primary_secret: Optional[str] = None,
+) -> bool:
+    if not signature:
+        return False
+    for secret in get_signing_secrets(primary_secret):
+        if verify_packet(payload, signature, secret):
+            return True
+    return False

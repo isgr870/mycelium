@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec /data/data/com.termux/files/home/mycelium/scripts/start_cluster.sh start
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "$REPO_DIR/scripts/start_cluster.sh" start

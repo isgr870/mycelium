@@ -46,7 +46,7 @@ import sqlite3
 import hashlib
 from typing import Dict, Any, List
 from fastapi import APIRouter, Request, HTTPException, status
-from core.security_hardening import verify_packet
+from core.security_hardening import verify_packet, verify_packet_with_rotation, get_clock_skew_seconds
 from spore_sync import SimpleBloomFilter
 
 router = APIRouter(prefix="/mesh/spores", tags=["spores"])
@@ -190,7 +190,15 @@ def build_local_bloom(size: int = 512, hash_count: int = 3) -> Dict[str, Any]:
 
 def _verify_signed_request(raw_body: bytes, signature: str) -> Dict[str, Any]:
     secret = os.environ.get("MYCELIUM_SECRET_KEY", "")
-    if not signature or not verify_packet(raw_body, signature, secret):
+    rotate_verifier = globals().get("verify_packet_with_rotation")
+    skew_getter = globals().get("get_clock_skew_seconds")
+    skew_window = int(skew_getter(MAX_CLOCK_SKEW_SECONDS)) if callable(skew_getter) else MAX_CLOCK_SKEW_SECONDS
+    sig_ok = (
+        bool(rotate_verifier(raw_body, signature, secret))
+        if callable(rotate_verifier)
+        else bool(signature and verify_packet(raw_body, signature, secret))
+    )
+    if not signature or not sig_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing HMAC packet signature.",
@@ -205,14 +213,14 @@ def _verify_signed_request(raw_body: bytes, signature: str) -> Dict[str, Any]:
             detail="Malformed signed spore envelope.",
         )
     now = int(time.time())
-    if abs(now - ts) > MAX_CLOCK_SKEW_SECONDS:
+    if abs(now - ts) > skew_window:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Spore envelope timestamp expired.",
         )
     raw_nonce = str(envelope.get("nonce", "")).strip()
     replay_key = raw_nonce or f"body:{hashlib.sha256(raw_body).hexdigest()}"
-    expires_at = ts + MAX_CLOCK_SKEW_SECONDS
+    expires_at = ts + skew_window
 
     conn = _get_conn()
     try:

@@ -64,7 +64,15 @@ async def receive_gossip(request: Request):
     signature = request.headers.get("X-Mycelium-Signature", "")
     raw_body = await request.body()
 
-    if not signature or not verify_packet(raw_body, signature, secret):
+    rotate_verifier = globals().get("verify_packet_with_rotation")
+    skew_getter = globals().get("get_clock_skew_seconds")
+    skew_window = int(skew_getter(MAX_CLOCK_SKEW_SECONDS)) if callable(skew_getter) else MAX_CLOCK_SKEW_SECONDS
+    sig_ok = (
+        bool(rotate_verifier(raw_body, signature, secret))
+        if callable(rotate_verifier)
+        else bool(signature and verify_packet(raw_body, signature, secret))
+    )
+    if not signature or not sig_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing HMAC packet signature.",
@@ -80,7 +88,7 @@ async def receive_gossip(request: Request):
             detail="Malformed gossip JSON envelope.",
         )
 
-    if abs(int(time.time()) - ts) > MAX_CLOCK_SKEW_SECONDS:
+    if abs(int(time.time()) - ts) > skew_window:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Gossip packet timestamp outside allowed replay window.",
