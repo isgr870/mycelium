@@ -25,3 +25,13 @@ models/
 llama-cli
 llama-server
 models/
+.mycelium/*.key
+.mycelium/node.key
+
+# Local runtime & SQLite WAL artifacts
+.env
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.pid
