@@ -87,6 +87,17 @@ def _get_conn() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS seen_nonces (
+            nonce TEXT PRIMARY KEY,
+            expires_at INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_seen_nonces_expires_at ON seen_nonces (expires_at)"
+    )
     conn.commit()
     return conn
 
@@ -193,11 +204,33 @@ def _verify_signed_request(raw_body: bytes, signature: str) -> Dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Malformed signed spore envelope.",
         )
-    if abs(int(time.time()) - ts) > MAX_CLOCK_SKEW_SECONDS:
+    now = int(time.time())
+    if abs(now - ts) > MAX_CLOCK_SKEW_SECONDS:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Spore envelope timestamp expired.",
         )
+    raw_nonce = str(envelope.get("nonce", "")).strip()
+    replay_key = raw_nonce or f"body:{hashlib.sha256(raw_body).hexdigest()}"
+    expires_at = ts + MAX_CLOCK_SKEW_SECONDS
+
+    conn = _get_conn()
+    try:
+        conn.execute("DELETE FROM seen_nonces WHERE expires_at < ?", (now,))
+        conn.execute(
+            "INSERT INTO seen_nonces (nonce, expires_at) VALUES (?, ?)",
+            (replay_key, expires_at),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Replay detected: duplicate nonce or envelope.",
+        )
+    finally:
+        conn.close()
+
     return payload
 
 
