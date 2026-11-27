@@ -20,3 +20,6 @@ app.include_router(wan_mesh.router)
 from core import spore_vault_sync
 app.include_router(spore_vault_sync.router)
 
+
+from core import slices_api
+app.include_router(slices_api.router)
