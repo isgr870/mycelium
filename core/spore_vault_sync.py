@@ -190,7 +190,7 @@ def build_local_bloom(size: int = 512, hash_count: int = 3) -> Dict[str, Any]:
     }
 
 
-def _verify_signed_request(raw_body: bytes, signature: str) -> Dict[str, Any]:
+def _verify_signed_request(raw_body: bytes, signature: str, request: Request | None = None) -> Dict[str, Any]:
     secret = os.environ.get("MYCELIUM_SECRET_KEY", "")
     rotate_verifier = globals().get("verify_packet_with_rotation")
     skew_getter = globals().get("get_clock_skew_seconds")
@@ -200,7 +200,11 @@ def _verify_signed_request(raw_body: bytes, signature: str) -> Dict[str, Any]:
         if callable(rotate_verifier)
         else bool(signature and verify_packet(raw_body, signature, secret))
     )
-    if not signature or not sig_ok:
+    ed25519_auth = False
+    if request is not None:
+        auth_mode = verify_peer_or_hmac(request, raw_body, signature)
+        ed25519_auth = auth_mode.startswith("ed25519:")
+    if not ed25519_auth and (not signature or not sig_ok):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing HMAC packet signature.",
@@ -262,7 +266,7 @@ async def get_spore_manifest():
 async def push_spores(request: Request):
     raw_body = await request.body()
     sig = request.headers.get("X-Mycelium-Signature", "")
-    payload = _verify_signed_request(raw_body, sig)
+    payload = _verify_signed_request(raw_body, sig, request)
 
     incoming = payload.get("spores", [])
     if not isinstance(incoming, list):
@@ -289,7 +293,7 @@ async def push_spores(request: Request):
 async def pull_missing_spores(request: Request):
     raw_body = await request.body()
     sig = request.headers.get("X-Mycelium-Signature", "")
-    payload = _verify_signed_request(raw_body, sig)
+    payload = _verify_signed_request(raw_body, sig, request)
 
     remote_bits = payload.get("bit_array", [])
     bf_size = int(payload.get("size", 512))
@@ -452,7 +456,7 @@ async def mesh_list_jobs(job_type: str | None = None):
 async def mesh_create_job(request: Request):
     raw_body = await request.body()
     sig = request.headers.get("X-Mycelium-Signature", "")
-    payload = _verify_signed_request(raw_body, sig)
+    payload = _verify_signed_request(raw_body, sig, request)
     goal_id = str(payload.get("goal_id", "mycelium-core-goal"))
     job_type = str(payload.get("job_type", "general"))
     task = payload.get("task", {})
@@ -480,7 +484,7 @@ async def mesh_create_job(request: Request):
 async def mesh_claim_job(request: Request):
     raw_body = await request.body()
     sig = request.headers.get("X-Mycelium-Signature", "")
-    payload = _verify_signed_request(raw_body, sig)
+    payload = _verify_signed_request(raw_body, sig, request)
     job_id = str(payload.get("job_id", ""))
     worker_id = str(payload.get("worker_id", get_node_role_info()["node_id"]))
     lease_sec = int(payload.get("lease_seconds", 120))
@@ -490,7 +494,7 @@ async def mesh_claim_job(request: Request):
 async def mesh_complete_job(request: Request):
     raw_body = await request.body()
     sig = request.headers.get("X-Mycelium-Signature", "")
-    payload = _verify_signed_request(raw_body, sig)
+    payload = _verify_signed_request(raw_body, sig, request)
     job_id = str(payload.get("job_id", ""))
     worker_id = str(payload.get("worker_id", get_node_role_info()["node_id"]))
     result = payload.get("result", {})
@@ -584,7 +588,7 @@ async def mesh_list_peers():
 async def mesh_register_peer(request: Request):
     raw_body = await request.body()
     sig = request.headers.get("X-Mycelium-Signature", "")
-    payload = _verify_signed_request(raw_body, sig)
+    payload = _verify_signed_request(raw_body, sig, request)
     url = str(payload.get("url", "")).strip()
     if not url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing peer url.")
@@ -604,7 +608,7 @@ async def mesh_register_peer(request: Request):
 async def mesh_gossip_tick(request: Request):
     raw_body = await request.body()
     sig = request.headers.get("X-Mycelium-Signature", "")
-    payload = _verify_signed_request(raw_body, sig)
+    payload = _verify_signed_request(raw_body, sig, request)
     gossip_id = str(payload.get("gossip_id", ""))
     ttl = int(payload.get("ttl", 8))
     hop = int(payload.get("hop", 0))
@@ -779,3 +783,28 @@ async def _mesh_router_lifespan(_router):
     stop_background_gossip_loop(timeout=1.0)
 
 router.lifespan_context = _mesh_router_lifespan
+
+
+from core.peer_identity import PeerIdentityStore
+
+PEER_STORE = PeerIdentityStore()
+
+
+def verify_peer_or_hmac(request: Request, raw_body: bytes, hmac_signature: str) -> str:
+    peer_id = request.headers.get("X-Mycelium-Peer-Id", "").strip()
+    ed25519_sig = request.headers.get("X-Mycelium-Ed25519-Sig", "").strip()
+
+    if peer_id or ed25519_sig:
+        if not peer_id or not ed25519_sig:
+            raise HTTPException(
+                status_code=401,
+                detail="Both X-Mycelium-Peer-Id and X-Mycelium-Ed25519-Sig are required.",
+            )
+        PEER_STORE.reload()
+        ok, reason, peer = PEER_STORE.verify_request(peer_id, raw_body, ed25519_sig)
+        if not ok:
+            status_code = 403 if (peer and peer.tier == "quarantined") else 401
+            raise HTTPException(status_code=status_code, detail=reason)
+        return f"ed25519:{peer_id}:{peer.tier}"
+
+    return "hmac:operator"

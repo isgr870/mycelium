@@ -158,3 +158,27 @@ async def sync_with_bootstrap_peers(self_url: str = "") -> None:
                                 register_peer(discovered, {"source": "gossip_discovery"})
                 except Exception:
                     pass
+
+
+from core.peer_identity import PeerIdentityStore
+
+PEER_STORE = PeerIdentityStore()
+
+
+def verify_peer_or_hmac(request: Request, raw_body: bytes, hmac_signature: str) -> str:
+    peer_id = request.headers.get("X-Mycelium-Peer-Id", "").strip()
+    ed25519_sig = request.headers.get("X-Mycelium-Ed25519-Sig", "").strip()
+
+    if peer_id or ed25519_sig:
+        if not peer_id or not ed25519_sig:
+            raise HTTPException(
+                status_code=401,
+                detail="Both X-Mycelium-Peer-Id and X-Mycelium-Ed25519-Sig are required.",
+            )
+        ok, reason, peer = PEER_STORE.verify_request(peer_id, raw_body, ed25519_sig)
+        if not ok:
+            status_code = 403 if (peer and peer.tier == "quarantined") else 401
+            raise HTTPException(status_code=status_code, detail=reason)
+        return f"ed25519:{peer_id}:{peer.tier}"
+
+    return "hmac:operator"

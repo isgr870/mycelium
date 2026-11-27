@@ -17,3 +17,6 @@ if __name__ == "__main__":
 
 from core import wan_mesh
 app.include_router(wan_mesh.router)
+from core import spore_vault_sync
+app.include_router(spore_vault_sync.router)
+
