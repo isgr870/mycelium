@@ -5,12 +5,14 @@ import asyncio
 import httpx
 from typing import Dict, Any, List
 from fastapi import APIRouter, Request, HTTPException, status
+from core.mycelial_defense import MycelialDefense
 from core.security_hardening import sign_packet, verify_packet, verify_packet_with_rotation, get_clock_skew_seconds
 
 router = APIRouter(prefix="/mesh", tags=["mesh"])
 
 # In-memory registry of reachable WAN/LAN peers: {peer_url: {"last_seen": float, "meta": dict}}
 PEER_REGISTRY: Dict[str, Dict[str, Any]] = {}
+DEFENSE = MycelialDefense(strike_threshold=3, base_quarantine_seconds=30.0, max_quarantine_seconds=900.0, recovery_healthy_streak=3)
 MAX_CLOCK_SKEW_SECONDS = 60
 
 
@@ -73,6 +75,8 @@ async def receive_gossip(request: Request):
         else bool(signature and verify_packet(raw_body, signature, secret))
     )
     if not signature or not sig_ok:
+        peer_hint = request.client.host if request.client else "unknown-peer"
+        DEFENSE.record_violation(peer_hint, "invalid_hmac")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing HMAC packet signature.",
@@ -102,6 +106,12 @@ async def receive_gossip(request: Request):
         if isinstance(peer_url, str) and peer_url.startswith(("http://", "https://")):
             register_peer(peer_url, {"source": "peer_exchange"})
 
+    for q_peer in payload.get("quarantined_peers", []):
+        if isinstance(q_peer, str) and q_peer.strip():
+            DEFENSE.record_violation(q_peer.strip(), "mesh_alarm_advisory")
+    if isinstance(sender_url, str) and sender_url.strip():
+        DEFENSE.record_healthy(sender_url.strip())
+
     prune_stale_peers()
     return {
         "status": "accepted",
@@ -118,7 +128,7 @@ async def sync_with_bootstrap_peers(self_url: str = "") -> None:
     while True:
         await asyncio.sleep(15)
         prune_stale_peers()
-        targets = list(PEER_REGISTRY.keys())
+        targets = DEFENSE.route_peers(list(PEER_REGISTRY.keys()))
         if not targets:
             continue
 

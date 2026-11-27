@@ -46,6 +46,7 @@ import sqlite3
 import hashlib
 from typing import Dict, Any, List
 from fastapi import APIRouter, Request, HTTPException, status
+from core.mycelial_defense import MycelialDefense
 from core.security_hardening import verify_packet, verify_packet_with_rotation, get_clock_skew_seconds
 from spore_sync import SimpleBloomFilter
 
@@ -55,6 +56,7 @@ DIR = os.path.expanduser("~/mycelium")
 DB_PATH = os.path.join(DIR, "ledger.db")
 _INITIAL_DB_PATH = DB_PATH
 MAX_CLOCK_SKEW_SECONDS = 120
+DEFENSE = MycelialDefense(strike_threshold=3, base_quarantine_seconds=30.0, max_quarantine_seconds=900.0, recovery_healthy_streak=3)
 
 
 def _enable_wal(conn: sqlite3.Connection) -> None:
