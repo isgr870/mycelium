@@ -14,3 +14,6 @@ if __name__ == "__main__":
         host=os.environ["MYCELIUM_HOST"],
         port=int(os.environ["MYCELIUM_PORT"]),
     )
+
+from core import wan_mesh
+app.include_router(wan_mesh.router)
