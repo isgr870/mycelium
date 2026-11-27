@@ -23,3 +23,6 @@ app.include_router(spore_vault_sync.router)
 
 from core import slices_api
 app.include_router(slices_api.router)
+
+from core import naming_api
+app.include_router(naming_api.router)
