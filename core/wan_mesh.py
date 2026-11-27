@@ -182,3 +182,8 @@ def verify_peer_or_hmac(request: Request, raw_body: bytes, hmac_signature: str) 
         return f"ed25519:{peer_id}:{peer.tier}"
 
     return "hmac:operator"
+
+
+@router.post("/gossip/tick")
+async def mesh_gossip_tick_alias(request: Request):
+    return await mesh_gossip(request)
