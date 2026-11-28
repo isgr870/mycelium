@@ -15,12 +15,7 @@ import uvicorn
 
 DIR = os.path.expanduser("~/mycelium")
 DB_PATH = os.path.join(DIR, "ledger.db")
-UDP_PORT = 8001
-LLM_ENGINE_URL = "http://0.0.0.0:8080/v1/chat/completions"
 
-PEERS = {}
-
-def init_db():
 def open_db(db_path: str = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=15.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -29,6 +24,12 @@ def open_db(db_path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+UDP_PORT = 8001
+LLM_ENGINE_URL = "http://0.0.0.0:8080/v1/chat/completions"
+
+PEERS = {}
+
+def init_db():
     conn = open_db(DB_PATH)
     c = conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, prompt TEXT, response TEXT, node_origin TEXT)")
