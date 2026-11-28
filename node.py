@@ -80,6 +80,8 @@ from core.security_hardening import (
 from core.wan_mesh import router as wan_router, sync_with_bootstrap_peers
 from core.spore_vault_sync import router as spore_router
 from core.resilience_queue import router as resilience_router, resilience_flush_loop
+from core.naming_api import router as naming_router
+from core.slices_api import router as slices_router
 
 
 @asynccontextmanager
@@ -104,6 +106,8 @@ ws_guard = WebSocketGuard(max_bytes=65536, rate_per_min=240)
 app.include_router(wan_router)
 app.include_router(spore_router)
 app.include_router(resilience_router)
+app.include_router(naming_router)
+app.include_router(slices_router)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def get_local_knowledge(prompt: str) -> str:

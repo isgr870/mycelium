@@ -53,6 +53,7 @@ def _default_peer_urls() -> List[str]:
 
 
 def _http_json(method: str, url: str, payload: Optional[dict] = None, timeout: float = 4.0) -> tuple[int, dict]:
+    resolved_timeout = float(timeout)
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"} if payload is not None else {}
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
