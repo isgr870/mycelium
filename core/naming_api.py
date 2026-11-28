@@ -3,8 +3,9 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException
 
+from core.edge_defense import verify_pow_token
 from core.naming_discovery import NamingDiscoveryStore
 
 
@@ -24,16 +25,48 @@ def get_naming_store() -> NamingDiscoveryStore:
     return NamingDiscoveryStore(_default_db_path())
 
 
+def _pow_required() -> bool:
+    return os.environ.get("MYCELIUM_REQUIRE_NAME_POW", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _pow_bits() -> int:
+    try:
+        return max(1, int(os.environ.get("MYCELIUM_NAME_POW_BITS", "10")))
+    except ValueError:
+        return 10
+
+
 @router.post("/register")
-def register_name(record: dict = Body(...)) -> dict:
+def register_name(
+    record: dict = Body(...),
+    x_mycelium_pow: Optional[str] = Header(default=None, alias="X-Mycelium-PoW"),
+) -> dict:
+    name = str(record.get("name", "")).strip().lower()
+    node_id = str(record.get("node_id", "")).strip()
+    pow_token = (x_mycelium_pow or str(record.get("pow_token", ""))).strip()
+
+    if _pow_required():
+        bits = _pow_bits()
+        subject = f"{name}:{node_id}"
+        if not verify_pow_token(subject, pow_token, difficulty_bits=bits):
+            raise HTTPException(
+                status_code=428,
+                detail={
+                    "status": "pow_required",
+                    "reason": "missing_or_invalid_pow",
+                    "subject": subject,
+                    "difficulty_bits": bits,
+                },
+            )
+
     store = get_naming_store()
     ok, reason = store.register_or_update(record)
     if not ok:
         raise HTTPException(status_code=400, detail={"status": "rejected", "reason": reason})
     return {
         "status": "registered",
-        "name": str(record["name"]).strip().lower(),
-        "node_id": str(record["node_id"]).strip(),
+        "name": name,
+        "node_id": node_id,
         "expires_at": int(record["expires_at"]),
     }
 

@@ -126,3 +126,9 @@ async def chunk_put(chunk_hash: str, request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"status": "stored", "chunk_hash": stored_hash, "bytes": len(raw_bytes)}
+
+
+@router.post("/sync/replicate")
+def trigger_hyphal_replication() -> dict:
+    from core.hyphal_sync import replicate_once
+    return replicate_once()
