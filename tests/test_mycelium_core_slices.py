@@ -1,6 +1,5 @@
 import inspect
 import os
-import pytest
 
 from core.chunk_store import ChunkStore, sha256_hex
 from core.e2ee_mailbox import (
@@ -9,7 +8,7 @@ from core.e2ee_mailbox import (
     encrypt_for_recipient,
     generate_x25519_keypair,
 )
-from core.edge_defense import EdgeQuotaEngine, compute_pow_nonce, verify_pow_token
+from core.edge_defense import DEFAULT_TIER_LIMITS, EdgeQuotaEngine, compute_pow_nonce, verify_pow_token
 from core.peer_identity import generate_ed25519_identity
 
 
@@ -97,33 +96,31 @@ def test_naming_pow_verification():
 
 
 def test_edge_quota_enforcement(tmp_path):
-    db_file = str(tmp_path / "edge_quota.db")
-    sig = inspect.signature(EdgeQuotaEngine)
-    kwargs = {}
-    for p_name in sig.parameters:
-        if "db" in p_name or "path" in p_name:
-            kwargs[p_name] = db_file
-
-    engine = EdgeQuotaEngine(**kwargs) if kwargs else EdgeQuotaEngine()
-    check_method = None
-    for m_name in ("evaluate", "check", "allow", "record", "consume", "check_request"):
-        cand = getattr(engine, m_name, None)
-        if callable(cand):
-            check_method = cand
-            break
-
-    assert check_method is not None, "EdgeQuotaEngine has no callable quota check method"
-
+    now = 1_795_854_500.0
+    engine = EdgeQuotaEngine(db_path=str(tmp_path / "edge_quota.db"))
     peer = "peer-quota-test"
-    outcomes = []
-    for _ in range(10):
-        try:
-            res = check_method(peer, 1024 * 1024)
-            outcomes.append(("ok", res))
-        except TypeError:
-            res = check_method(principal_id=peer, bytes_count=1024 * 1024)
-            outcomes.append(("ok", res))
-        except Exception as exc:
-            outcomes.append(("err", exc))
 
-    assert len(outcomes) == 10
+    assert engine.effective_tier(peer, base_tier="external", now=now) == "external"
+
+    # Byte budget for external tier is 1,048,576 bytes per window
+    byte_cap = DEFAULT_TIER_LIMITS["external"]["max_bytes"]
+    allowed, reason, _ = engine.consume_quota(peer, payload_bytes=byte_cap // 2, base_tier="external", now=now)
+    assert allowed is True
+
+    denied, reason, _ = engine.consume_quota(peer, payload_bytes=byte_cap, base_tier="external", now=now + 1)
+    assert denied is False
+    assert isinstance(reason, str) and len(reason) > 0
+
+    # Escalate strikes up to external max_strikes (3) -> quarantined tier
+    max_strikes = DEFAULT_TIER_LIMITS["external"]["max_strikes"]
+    tier_after_strikes = "external"
+    for i in range(max_strikes):
+        _, tier_after_strikes = engine.record_strike(
+            peer, base_tier="external", quarantine_sec=300.0, now=now + 2 + i
+        )
+
+    assert tier_after_strikes == "quarantined"
+    assert engine.effective_tier(peer, base_tier="external", now=now + 10) == "quarantined"
+
+    q_allowed, _, _ = engine.consume_quota(peer, payload_bytes=64, base_tier="external", now=now + 10)
+    assert q_allowed is False
