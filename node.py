@@ -21,7 +21,15 @@ LLM_ENGINE_URL = "http://0.0.0.0:8080/v1/chat/completions"
 PEERS = {}
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+def open_db(db_path: str = DB_PATH) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, timeout=15.0, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=15000;")
+    return conn
+
+
+    conn = open_db(DB_PATH)
     c = conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, prompt TEXT, response TEXT, node_origin TEXT)")
     c.execute("CREATE TABLE IF NOT EXISTS knowledge (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL, title TEXT, content TEXT, embedding_json TEXT)")
@@ -99,7 +107,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 def get_local_knowledge(prompt: str) -> str:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_db(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT title, content FROM knowledge")
         rows = c.fetchall()
@@ -129,7 +137,7 @@ async def serve_index():
 async def get_status():
     now = time.time()
     active_peers = [ip for ip, last in PEERS.items() if now - last < 15]
-    conn = sqlite3.connect(DB_PATH)
+    conn = open_db(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM ledger")
     l_cnt = c.fetchone()[0]
@@ -161,7 +169,7 @@ async def get_sys_stats():
 
 @app.get("/knowledge/list")
 async def list_knowledge():
-    conn = sqlite3.connect(DB_PATH)
+    conn = open_db(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id, timestamp, title, length(content) FROM knowledge ORDER BY id DESC")
     rows = c.fetchall()
@@ -170,7 +178,7 @@ async def list_knowledge():
 
 @app.delete("/knowledge/{doc_id}")
 async def delete_doc(doc_id: int):
-    conn = sqlite3.connect(DB_PATH)
+    conn = open_db(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM knowledge WHERE id = ?", (doc_id,))
     conn.commit()
@@ -179,7 +187,7 @@ async def delete_doc(doc_id: int):
 
 @app.get("/ledger/history")
 async def get_ledger():
-    conn = sqlite3.connect(DB_PATH)
+    conn = open_db(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id, timestamp, prompt, response, node_origin FROM ledger ORDER BY id DESC LIMIT 20")
     rows = c.fetchall()
@@ -193,7 +201,7 @@ async def ingest_doc(request: Request):
     content = data.get("content", "").strip()
     if not content:
         return JSONResponse({"status": "error", "message": "Content empty"}, status_code=400)
-    conn = sqlite3.connect(DB_PATH)
+    conn = open_db(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT INTO knowledge (timestamp, title, content, embedding_json) VALUES (?, ?, ?, ?)", (time.time(), title, content, "[]"))
     conn.commit()
@@ -244,7 +252,7 @@ async def handle_prompt(request: Request):
                                 yield f"data: {json.dumps({'token': tok})}\n\n"
                             except Exception:
                                 continue
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_db(DB_PATH)
             c = conn.cursor()
             c.execute("INSERT INTO ledger (timestamp, prompt, response, node_origin) VALUES (?, ?, ?, ?)", (time.time(), user_p, full_res, "local"))
             conn.commit()

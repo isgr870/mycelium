@@ -12,6 +12,63 @@ BACKUP_SCRIPT="$HOME/mycelium/scripts/termux-backup.sh"
 
 mkdir -p "$BASE_DIR"
 
+LOG_MAX_BYTES="${MYCELIUM_LOG_MAX_BYTES:-5242880}"
+LOG_KEEP_FILES="${MYCELIUM_LOG_KEEP:-3}"
+
+file_size_bytes() {
+  local target="$1"
+  if [[ ! -f "$target" ]]; then
+    echo 0
+    return 0
+  fi
+  if stat -c%s "$target" >/dev/null 2>&1; then
+    stat -c%s "$target"
+  elif stat -f%z "$target" >/dev/null 2>&1; then
+    stat -f%z "$target"
+  else
+    wc -c < "$target" | tr -d '[:space:]'
+  fi
+}
+
+rotate_log_file() {
+  local log_path="$1"
+  local max_bytes="${2:-5242880}"
+  local keep_count="${3:-3}"
+
+  [[ -f "$log_path" ]] || return 0
+  local current_size
+  current_size="$(file_size_bytes "$log_path")"
+  if [[ -z "$current_size" ]] || (( current_size < max_bytes )); then
+    return 0
+  fi
+
+  if (( keep_count < 1 )); then
+    : > "$log_path"
+    return 0
+  fi
+
+  rm -f "${log_path}.${keep_count}"
+  local i=$((keep_count - 1))
+  while (( i >= 1 )); do
+    if [[ -f "${log_path}.${i}" ]]; then
+      mv -f "${log_path}.${i}" "${log_path}.$((i + 1))"
+    fi
+    i=$((i - 1))
+  done
+  mv -f "$log_path" "${log_path}.1"
+  : > "$log_path"
+}
+
+rotate_all_logs() {
+  rotate_log_file "$LOG_FILE" "$LOG_MAX_BYTES" "$LOG_KEEP_FILES"
+  local rlog
+  for rlog in "${BASE_DIR}"/*/uvicorn.log; do
+    [[ -f "$rlog" ]] && rotate_log_file "$rlog" "$LOG_MAX_BYTES" "$LOG_KEEP_FILES"
+  done
+}
+
+
+
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "WATCHDOG_ALREADY_RUNNING pid=$(cat "$PID_FILE")"
   exit 0
