@@ -169,8 +169,10 @@ async def sync_with_bootstrap_peers(self_url: str = "") -> None:
                     if resp.status_code == 200:
                         register_peer(peer_url, {"source": "active_sync"})
                         for discovered in resp.json().get("known_peers", []):
-                            if isinstance(discovered, str) and discovered.startswith(("http://", "https://")):
-                                register_peer(discovered, {"source": "gossip_discovery"})
+                            if isinstance(discovered, str):
+                                clean_disc = discovered.strip().rstrip("/")
+                                if clean_disc.startswith(("http://", "https://")) and clean_disc != clean_self:
+                                    register_peer(clean_disc, {"source": "gossip_discovery"})
                 except Exception:
                     pass
 
