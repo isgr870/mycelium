@@ -41,11 +41,11 @@ def _default_peer_urls() -> List[str]:
         "MYCELIUM_PEER_URLS",
         "http://127.0.0.1:8101,http://127.0.0.1:8102,http://127.0.0.1:8103",
     )
-    self_url = _default_self_url()
+    self_url = _default_self_url().rstrip("/")
     urls: List[str] = []
     for part in raw.split(","):
         u = part.strip().rstrip("/")
-        if not u or u == self_url:
+        if not u or not u.startswith(("http://", "https://")) or u == self_url:
             continue
         if u not in urls:
             urls.append(u)
@@ -57,7 +57,7 @@ def _http_json(method: str, url: str, payload: Optional[dict] = None, timeout: f
     headers = {"Content-Type": "application/json"} if payload is not None else {}
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=resolved_timeout) as resp:
             raw = resp.read().decode("utf-8") or "{}"
             return int(resp.status), json.loads(raw)
     except urllib.error.HTTPError as exc:
@@ -83,9 +83,10 @@ def list_pending_recipient_ids(db_path: str) -> List[str]:
 def replicate_once(
     db_path: Optional[str] = None,
     peer_urls: Optional[List[str]] = None,
-    timeout: float = 4.0,
+    timeout: Optional[float] = None,
 ) -> Dict[str, object]:
     resolved_db = db_path or _default_db_path()
+    resolved_timeout = float(timeout) if timeout is not None else float(os.environ.get("MYCELIUM_SYNC_TIMEOUT", "4.0"))
     peers = peer_urls if peer_urls is not None else _default_peer_urls()
 
     naming = NamingDiscoveryStore(resolved_db)
@@ -118,7 +119,7 @@ def replicate_once(
             data = json.dumps(rec).encode("utf-8")
             req = urllib.request.Request(f"{peer}/mesh/names/register", data=data, method="POST", headers=headers)
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                with urllib.request.urlopen(req, timeout=resolved_timeout) as resp:
                     code = int(resp.status)
             except urllib.error.HTTPError as exc:
                 code = int(exc.code)
@@ -128,7 +129,7 @@ def replicate_once(
                 names_pushed += 1
 
         # 2. Pull remote signed name records <- peer
-        code, data = _http_json("GET", f"{peer}/mesh/names/peers", None, timeout=timeout)
+        code, data = _http_json("GET", f"{peer}/mesh/names/peers", None, timeout=resolved_timeout)
         if code == 200 and isinstance(data.get("peers"), list):
             for remote_rec in data["peers"]:
                 ok, _ = naming.register_or_update(remote_rec)
@@ -139,13 +140,13 @@ def replicate_once(
 
         # 3. Push local undelivered E2EE envelopes -> peer
         for env in local_envelopes:
-            code, _ = _http_json("POST", f"{peer}/mesh/mailbox/enqueue", env, timeout=timeout)
+            code, _ = _http_json("POST", f"{peer}/mesh/mailbox/enqueue", env, timeout=resolved_timeout)
             if code == 200:
                 mail_pushed += 1
 
         # 4. Pull undelivered E2EE envelopes for known recipients <- peer
         for rec_id in pending_recipients:
-            code, data = _http_json("GET", f"{peer}/mesh/mailbox/{rec_id}", None, timeout=timeout)
+            code, data = _http_json("GET", f"{peer}/mesh/mailbox/{rec_id}", None, timeout=resolved_timeout)
             if code == 200 and isinstance(data.get("messages"), list):
                 for remote_env in data["messages"]:
                     if mbox.enqueue(remote_env):

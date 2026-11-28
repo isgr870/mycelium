@@ -98,13 +98,21 @@ async def receive_gossip(request: Request):
             detail="Gossip packet timestamp outside allowed replay window.",
         )
 
+    local_self_url = (
+        os.environ.get("MYCELIUM_PUBLIC_URL") or os.environ.get("MYCELIUM_SELF_URL") or ""
+    ).strip().rstrip("/")
+
     sender_url = payload.get("self_url")
-    if isinstance(sender_url, str) and sender_url.startswith(("http://", "https://")):
-        register_peer(sender_url, {"source": "gossip"})
+    if isinstance(sender_url, str):
+        clean_sender = sender_url.strip().rstrip("/")
+        if clean_sender.startswith(("http://", "https://")) and clean_sender != local_self_url:
+            register_peer(clean_sender, {"source": "gossip"})
 
     for peer_url in payload.get("known_peers", []):
-        if isinstance(peer_url, str) and peer_url.startswith(("http://", "https://")):
-            register_peer(peer_url, {"source": "peer_exchange"})
+        if isinstance(peer_url, str):
+            clean_peer = peer_url.strip().rstrip("/")
+            if clean_peer.startswith(("http://", "https://")) and clean_peer != local_self_url:
+                register_peer(clean_peer, {"source": "peer_exchange"})
 
     for q_peer in payload.get("quarantined_peers", []):
         if isinstance(q_peer, str) and q_peer.strip():
@@ -121,24 +129,31 @@ async def receive_gossip(request: Request):
 
 async def sync_with_bootstrap_peers(self_url: str = "") -> None:
     """Periodically exchanges signed peer lists with configured WAN seed nodes."""
-    secret = os.environ.get("MYCELIUM_SECRET_KEY", "")
+    clean_self = (self_url or "").strip().rstrip("/")
     for seed in get_bootstrap_peers():
-        register_peer(seed, {"source": "bootstrap"})
+        clean_seed = seed.strip().rstrip("/")
+        if clean_seed and clean_seed != clean_self:
+            register_peer(clean_seed, {"source": "bootstrap"})
 
     while True:
         await asyncio.sleep(15)
         prune_stale_peers()
-        targets = DEFENSE.route_peers(list(PEER_REGISTRY.keys()))
+        secret = os.environ.get("MYCELIUM_SECRET_KEY", "")
+        timeout_sec = float(os.environ.get("MYCELIUM_GOSSIP_TIMEOUT", "5.0"))
+        targets = [
+            u for u in DEFENSE.route_peers(list(PEER_REGISTRY.keys()))
+            if not clean_self or u.rstrip("/") != clean_self
+        ]
         if not targets:
             continue
 
         body = build_signed_envelope(
-            {"self_url": self_url, "known_peers": targets},
+            {"self_url": clean_self, "known_peers": targets},
             secret,
         )
         sig = sign_packet(body, secret)
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=timeout_sec) as client:
             for peer_url in targets:
                 if self_url and peer_url == self_url.rstrip("/"):
                     continue
@@ -186,4 +201,4 @@ def verify_peer_or_hmac(request: Request, raw_body: bytes, hmac_signature: str) 
 
 @router.post("/gossip/tick")
 async def mesh_gossip_tick_alias(request: Request):
-    return await mesh_gossip(request)
+    return await receive_gossip(request)
