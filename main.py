@@ -26,3 +26,6 @@ app.include_router(slices_api.router)
 
 from core import naming_api
 app.include_router(naming_api.router)
+
+from core.edge_middleware import EdgeQuotaMiddleware
+app.add_middleware(EdgeQuotaMiddleware)
