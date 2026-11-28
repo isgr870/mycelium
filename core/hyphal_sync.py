@@ -15,7 +15,10 @@ def _default_db_path() -> str:
     if env_db:
         return env_db
     prefix = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
-    region = os.environ.get("MYCELIUM_REGION", "default").strip() or "default"
+    region = os.environ.get("MYCELIUM_REGION", "").strip().lower()
+    if not region:
+        port_to_region = {"8101": "us", "8102": "ug", "8103": "asia"}
+        region = port_to_region.get(os.environ.get("MYCELIUM_PORT", "").strip(), "default")
     return str(Path(prefix) / "tmp/mycelium_regions" / region / f"{region}.db")
 
 
