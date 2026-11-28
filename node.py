@@ -61,30 +61,40 @@ def udp_listener():
 threading.Thread(target=udp_broadcaster, daemon=True).start()
 threading.Thread(target=udp_listener, daemon=True).start()
 
-app = FastAPI(title="Mycelium Mesh Node")
+import asyncio
+from contextlib import asynccontextmanager
 from core.security_hardening import (
     validate_production_environment,
     PayloadAndRateLimitMiddleware,
     WebSocketGuard,
 )
+from core.wan_mesh import router as wan_router, sync_with_bootstrap_peers
+from core.spore_vault_sync import router as spore_router
+from core.resilience_queue import router as resilience_router, resilience_flush_loop
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    public_url = os.environ.get("MYCELIUM_PUBLIC_URL", "").strip()
+    tasks = [
+        asyncio.create_task(sync_with_bootstrap_peers(self_url=public_url)),
+        asyncio.create_task(resilience_flush_loop()),
+    ]
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+app = FastAPI(title="Mycelium Mesh Node", lifespan=lifespan)
 SECRET_KEY = validate_production_environment(strict=True)
 app.add_middleware(PayloadAndRateLimitMiddleware, max_bytes=65536, rate_per_min=120)
 ws_guard = WebSocketGuard(max_bytes=65536, rate_per_min=240)
-import asyncio
-from core.wan_mesh import router as wan_router, sync_with_bootstrap_peers
-
 app.include_router(wan_router)
-
-@app.on_event("startup")
-async def _start_wan_mesh():
-    public_url = os.environ.get("MYCELIUM_PUBLIC_URL", "").strip()
-    asyncio.create_task(sync_with_bootstrap_peers(self_url=public_url))
-    from core.spore_vault_sync import router as spore_router
-    from core.resilience_queue import router as resilience_router, resilience_flush_loop
-    app.include_router(spore_router)
-    app.include_router(resilience_router)
-    asyncio.create_task(resilience_flush_loop())
+app.include_router(spore_router)
+app.include_router(resilience_router)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def get_local_knowledge(prompt: str) -> str:
