@@ -39,6 +39,8 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WATCHDOG_STARTED pid=$$ interval=${INTERV
 
 ensure_relays_healthy() {
   local unhealthy=0
+
+
   for port in 8101 8102 8103; do
     code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${port}/status" || echo "000")
     if [[ "$code" != "200" ]]; then
@@ -51,6 +53,33 @@ ensure_relays_healthy() {
   fi
 }
 
+
+MYCELIUM_SYNC_INTERVAL_SEC="${MYCELIUM_SYNC_INTERVAL_SEC:-60}"
+MYCELIUM_PEER_URLS="${MYCELIUM_PEER_URLS:-http://127.0.0.1:8101,http://127.0.0.1:8102,http://127.0.0.1:8103}"
+LAST_HYPHAL_SYNC_EPOCH=0
+
+run_hyphal_sync_pass() {
+  local now_epoch
+  now_epoch="$(date +%s)"
+  if (( now_epoch - LAST_HYPHAL_SYNC_EPOCH < MYCELIUM_SYNC_INTERVAL_SEC )); then
+    return 0
+  fi
+  LAST_HYPHAL_SYNC_EPOCH="$now_epoch"
+
+  local py_bin="${VIRTUAL_ENV:-$HOME/mycelium/venv}/bin/python"
+  [[ -x "$py_bin" ]] || py_bin="python3"
+
+  local pairs=("us:8101" "ug:8102" "asia:8103")
+  for pair in "${pairs[@]}"; do
+    local reg="${pair%%:*}"
+    local port="${pair##*:}"
+    MYCELIUM_REGION="$reg" \
+    MYCELIUM_PORT="$port" \
+    MYCELIUM_PEER_URLS="$MYCELIUM_PEER_URLS" \
+      "$py_bin" -m core.hyphal_sync >/dev/null 2>&1 || true
+  done
+}
+
 cycle=0
 while true; do
   cycle=$((cycle + 1))
@@ -59,6 +88,7 @@ while true; do
     echo "=== CYCLE ${cycle} @ ${ts} ==="
     ensure_relays_healthy
     "$REGIONS_SCRIPT" sync
+    run_hyphal_sync_pass
     if (( cycle % BACKUP_EVERY_N == 0 )); then
       for r in us ug asia; do
         MYCELIUM_BACKUP_TAG="region-${r}" \
